@@ -66,6 +66,13 @@ yarn-error.log
 # testing
 /coverage
 
+# local logs / analysis scratch
+metro.log
+.PVS-Studio/
+.vscode/
+.claude/settings.local.json
+.claude/launch.json
+
 # Yarn
 .yarn/*
 !.yarn/patches

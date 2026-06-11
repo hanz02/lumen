@@ -116,4 +116,8 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+
+    implementation ('com.google.ar:core:1.43.0')
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("com.gorisse.thomas.sceneform:sceneform:1.23.0")
 }
