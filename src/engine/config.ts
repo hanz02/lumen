@@ -62,5 +62,8 @@ export const LUX_CALIBRATION = {
   slope: 1.1054,
   intercept: 134.4,
   enabled: true,
+  /** Below this the linear intercept extrapolates wildly (validated range start). */
+  validMinLux: 200,
+  validMaxLux: 6000,
   source: '210-pair UT383 validation Apr–May 2026 (S21+; r=0.996, R²=0.993)',
 } as const;

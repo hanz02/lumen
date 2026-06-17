@@ -82,26 +82,29 @@ export function buildExplanation(
 ): string {
   const sentences: string[] = [];
 
+  const lux = Math.round(spot.lux);
+  const name = p.common_name_main;
+
   // Light (always present)
   switch (band) {
     case 'preferred':
       sentences.push(
-        `The measured ${Math.round(spot.lux)} lux sits in ${p.common_name_main}’s preferred range, so it should grow well here.`,
+        `Your spot reads ${lux} lux, which is right inside ${name}’s preferred range, so it should grow well here.`,
       );
       break;
     case 'survival':
       sentences.push(
-        `The measured ${Math.round(spot.lux)} lux is above the survival minimum but below the preferred level, so ${p.common_name_main} will persist rather than thrive.`,
+        `Your spot reads ${lux} lux — enough to keep ${name} alive, but below its preferred range, so expect it to hold on rather than really thrive.`,
       );
       break;
     case 'excess':
       sentences.push(
-        `The measured ${Math.round(spot.lux)} lux is brighter than ${p.common_name_main}’s preferred ceiling, which can stress the foliage.`,
+        `Your spot reads ${lux} lux, brighter than ${name} likes, which can scorch or fade the leaves.`,
       );
       break;
     case 'below_survival':
       sentences.push(
-        `The measured ${Math.round(spot.lux)} lux is below ${p.common_name_main}’s survival minimum.`,
+        `Your spot reads ${lux} lux, below the minimum ${name} needs to survive, so it would slowly decline here.`,
       );
       break;
   }
@@ -114,7 +117,7 @@ export function buildExplanation(
   // Distance / zone
   if (factors.distance.available && spot.distanceToWindowM != null) {
     sentences.push(
-      `At ${spot.distanceToWindowM.toFixed(2)} m from the window (${factors.distance.note}).`,
+      `It sits ${spot.distanceToWindowM.toFixed(1)} m from the window. ${factors.distance.note}`,
     );
   }
 
@@ -122,16 +125,32 @@ export function buildExplanation(
   if (spot.windowAspect && p.aspect_orientation) {
     const om = orientationMatch(p, spot.windowAspect);
     if (om === 'match') {
-      sentences.push(`${aspectWords(spot.windowAspect)}-facing matches its preferred orientation.`);
+      sentences.push(`The ${aspectWords(spot.windowAspect).toLowerCase()}-facing window is one it likes.`);
     } else if (om === 'mismatch') {
       sentences.push(
-        `${aspectWords(spot.windowAspect)}-facing is outside its usual orientation, but measured light is what drives this result.`,
+        `A ${aspectWords(spot.windowAspect).toLowerCase()}-facing window isn’t its usual pick, but the measured light is what really drives this match.`,
       );
     }
   }
 
   // Confidence
-  sentences.push(`Evidence confidence: ${p.final_confidence}.`);
+  sentences.push(confidenceSentence(p.final_confidence));
 
   return sentences.join(' ');
+}
+
+/** Plain-language version of the evidence-confidence tag. */
+function confidenceSentence(c: Confidence): string {
+  switch (c) {
+    case 'high':
+      return 'This is backed by high-confidence, species-specific evidence.';
+    case 'medium':
+      return 'This is backed by medium-confidence evidence.';
+    case 'low':
+      return 'This rests on lower-confidence evidence, so treat it as a guide.';
+    case 'provisional':
+      return 'This rests on provisional evidence, so treat it as a starting point.';
+    default:
+      return `Evidence confidence: ${c}.`;
+  }
 }

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Floor baseline for the sill coach animation (the floor the sill rises from). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#5F7A67" />
+    <corners android:radius="2dp" />
+</shape>

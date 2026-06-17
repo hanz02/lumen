@@ -1,0 +1,51 @@
+/** Typed wrapper for ARModule.startARMeasurement. One call = one AR session =
+ *  one line measurement; the tool/label options preset and (optionally) lock
+ *  the AR activity's mode so multi-step captures (plant distance, then window
+ *  width/height/sill) can't be mixed up. */
+
+import { NativeModules } from 'react-native';
+
+const { ARModule } = NativeModules;
+
+export type ARTool = 'PLANT_DISTANCE' | 'WINDOW_MEASURE';
+
+export type WindowMeasureKind = 'width' | 'height' | 'sill';
+
+export interface ARMeasureOptions {
+  tool: ARTool;
+  /** Hide the in-AR mode switch so the result is guaranteed to be `tool`. */
+  lockTool?: boolean;
+  /** Shown in the AR status bar / dialog and echoed back as measureLabel. */
+  label?: string;
+  /** Which window dimension this WINDOW_MEASURE session is for — selects the
+   *  matching coach animation/steps (width sweeps across, height up the glass,
+   *  sill rises from the floor). Ignored for PLANT_DISTANCE. */
+  measureKind?: WindowMeasureKind;
+}
+
+export interface ARResult {
+  /** Straight-line (3D) distance between the two anchors. */
+  distanceMeters: number;
+  distanceCm: number;
+  /** Floor-plane component — the primary plant-to-window distance (the tape
+   *  protocol measures horizontally; -1 if unavailable). */
+  horizontalDistanceMeters: number;
+  horizontalDistanceCm: number;
+  measurementTool: string;
+  measureLabel: string;
+  overallQuality: string;
+  firstPointQuality: string;
+  secondPointQuality: string;
+  /** Worst snap-burst scatter of the two points (mm); -1 when a point used
+   *  the instant-placement fallback (no burst). */
+  maxSnapSpreadMm: number;
+  /** Window mode only: the two points locked onto different detected planes
+   *  (possible surface depth offset in the span). */
+  planeMismatch: boolean;
+}
+
+export async function startARMeasurement(
+  options: ARMeasureOptions,
+): Promise<ARResult> {
+  return ARModule.startARMeasurement(options);
+}

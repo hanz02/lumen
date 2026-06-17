@@ -12,7 +12,11 @@ class ARPackage : ReactPackage {
     ): List<NativeModule> {
         return listOf(
             ARModule(reactContext),
-            LightSensorModule(reactContext)
+            LightSensorModule(reactContext),
+            PlantDataModule(reactContext),
+            CompassModule(reactContext),
+            LocationModule(reactContext),
+            EvalLogModule(reactContext)
         )
     }
 

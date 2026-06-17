@@ -1,18 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="80dp"
-    android:height="80dp"
+    android:width="72dp"
+    android:height="72dp"
     android:viewportWidth="80"
     android:viewportHeight="80">
+    <!-- thin ring -->
     <path
         android:fillColor="@android:color/transparent"
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="1.8"
-        android:pathData="M40,28 A12,12 0 0,1 52,40 A12,12 0 0,1 40,52 A12,12 0 0,1 28,40 A12,12 0 0,1 40,28 Z"/>
+        android:strokeWidth="1.1"
+        android:pathData="M53,40 A13,13 0 1,1 27,40 A13,13 0 1,1 53,40 Z"/>
+    <!-- four short ticks -->
     <path
         android:fillColor="@android:color/transparent"
         android:strokeColor="#FFFFFF"
-        android:strokeWidth="1.8"
+        android:strokeWidth="1.1"
         android:strokeLineCap="round"
-        android:pathData="M40,4 L40,22 M40,58 L40,76 M4,40 L22,40 M58,40 L76,40"/>
+        android:pathData="M40,16 L40,22 M40,58 L40,64 M16,40 L22,40 M58,40 L64,40"/>
+    <!-- centre dot -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M41.6,40 A1.6,1.6 0 1,1 38.4,40 A1.6,1.6 0 1,1 41.6,40 Z"/>
 </vector>

@@ -8,6 +8,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.ReadableMap
 
 class ARModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
@@ -39,19 +40,29 @@ class ARModule(private val reactContext: ReactApplicationContext) :
             if (resultCode == Activity.RESULT_OK && intent != null) {
                 val distanceMeters = intent.getFloatExtra("distance_meters", -1f)
                 val distanceCm = intent.getFloatExtra("distance_cm", -1f)
+                val horizontalMeters = intent.getFloatExtra("horizontal_distance_meters", -1f)
+                val horizontalCm = intent.getFloatExtra("horizontal_distance_cm", -1f)
                 val measurementTool = intent.getStringExtra("measurement_tool") ?: "UNKNOWN"
+                val measureLabel = intent.getStringExtra("measure_label") ?: ""
                 val overallQuality = intent.getStringExtra("overall_quality") ?: "UNKNOWN"
                 val firstPointQuality = intent.getStringExtra("first_point_quality") ?: "UNKNOWN"
                 val secondPointQuality = intent.getStringExtra("second_point_quality") ?: "UNKNOWN"
+                val maxSnapSpreadMm = intent.getFloatExtra("max_snap_spread_mm", -1f)
+                val planeMismatch = intent.getBooleanExtra("plane_mismatch", false)
 
                 if (distanceMeters >= 0f && distanceCm >= 0f) {
                     val result = Arguments.createMap().apply {
                         putDouble("distanceMeters", distanceMeters.toDouble())
                         putDouble("distanceCm", distanceCm.toDouble())
+                        putDouble("horizontalDistanceMeters", horizontalMeters.toDouble())
+                        putDouble("horizontalDistanceCm", horizontalCm.toDouble())
                         putString("measurementTool", measurementTool)
+                        putString("measureLabel", measureLabel)
                         putString("overallQuality", overallQuality)
                         putString("firstPointQuality", firstPointQuality)
                         putString("secondPointQuality", secondPointQuality)
+                        putDouble("maxSnapSpreadMm", maxSnapSpreadMm.toDouble())
+                        putBoolean("planeMismatch", planeMismatch)
                     }
 
                     promise.resolve(result)
@@ -78,8 +89,12 @@ class ARModule(private val reactContext: ReactApplicationContext) :
         return "ARModule"
     }
 
+    /** options (all optional): tool "PLANT_DISTANCE"|"WINDOW_MEASURE",
+     *  lockTool boolean (hide the mode switch), label string (shown in the
+     *  AR UI and echoed back as measureLabel), measureKind "width"|"height"|
+     *  "sill" (selects the matching window coach animation). */
     @ReactMethod
-    fun startARMeasurement(promise: Promise) {
+    fun startARMeasurement(options: ReadableMap?, promise: Promise) {
         val activity = getCurrentActivity()
 
         if (activity == null) {
@@ -102,6 +117,12 @@ class ARModule(private val reactContext: ReactApplicationContext) :
 
         try {
             val intent = Intent(activity, ARMeasurementActivity::class.java)
+            options?.let {
+                if (it.hasKey("tool")) intent.putExtra("initial_tool", it.getString("tool"))
+                if (it.hasKey("lockTool")) intent.putExtra("lock_tool", it.getBoolean("lockTool"))
+                if (it.hasKey("label")) intent.putExtra("measure_label", it.getString("label"))
+                if (it.hasKey("measureKind")) intent.putExtra("measure_kind", it.getString("measureKind"))
+            }
             activity.startActivityForResult(intent, AR_MEASUREMENT_REQUEST)
         } catch (e: Exception) {
             measurementPromise = null

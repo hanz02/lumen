@@ -47,7 +47,7 @@
             android:layout_height="40dp"
             android:gravity="center"
             android:text="Plant"
-            android:textColor="#F0F5EF"
+            android:textColor="#F2F7F0"
             android:textSize="13sp"
             android:textStyle="bold"
             android:clickable="true"
@@ -64,7 +64,7 @@
             android:layout_height="40dp"
             android:gravity="center"
             android:text="Window"
-            android:textColor="#F0F5EF"
+            android:textColor="#F2F7F0"
             android:textSize="13sp"
             android:textStyle="bold"
             android:clickable="true"
@@ -94,7 +94,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="DISTANCE"
-            android:textColor="#5BA068"
+            android:textColor="#56C17F"
             android:textSize="10sp"
             android:textStyle="bold"
             android:letterSpacing="0.15"
@@ -106,7 +106,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="—"
-            android:textColor="#F6C945"
+            android:textColor="#F4C84B"
             android:textSize="44sp"
             android:textStyle="bold"
             android:gravity="center"
@@ -116,7 +116,7 @@
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"
-            android:background="#2A4A38"
+            android:background="#25422E"
             android:layout_marginTop="12dp"
             android:layout_marginBottom="10dp" />
 
@@ -140,7 +140,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Scanning…"
-                android:textColor="#8DAE96"
+                android:textColor="#94B09C"
                 android:textSize="12sp" />
         </LinearLayout>
     </LinearLayout>
@@ -167,7 +167,7 @@
             android:paddingEnd="20dp"
             android:paddingBottom="10dp"
             android:text="Aim at the floor spot below the window."
-            android:textColor="#8DAE96"
+            android:textColor="#94B09C"
             android:textSize="13sp"
             android:gravity="center"
             android:maxLines="2"
@@ -187,7 +187,7 @@
                 android:text="↺  Reset"
                 android:textSize="14sp"
                 android:textStyle="bold"
-                android:textColor="#8DAE96"
+                android:textColor="#94B09C"
                 android:clickable="true"
                 android:focusable="true"
                 android:padding="10dp" />
@@ -201,7 +201,7 @@
                 android:text="+"
                 android:textSize="34sp"
                 android:textStyle="bold"
-                android:textColor="#F0F5EF"
+                android:textColor="#0B1A11"
                 android:clickable="true"
                 android:focusable="true"
                 android:background="@drawable/ar_snap_button" />
@@ -215,4 +215,146 @@
                 android:background="@drawable/ar_confidence_dot" />
         </FrameLayout>
     </LinearLayout>
+
+    <!-- Animated coach overlay: shown on entry, tap anywhere or "Got it" to dismiss -->
+    <FrameLayout
+        android:id="@+id/coachOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#E0081109"
+        android:clickable="true"
+        android:focusable="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:layout_marginStart="26dp"
+            android:layout_marginEnd="26dp"
+            android:orientation="vertical"
+            android:gravity="center_horizontal"
+            android:background="@drawable/ar_measurement_card_bg"
+            android:paddingStart="24dp"
+            android:paddingEnd="24dp"
+            android:paddingTop="26dp"
+            android:paddingBottom="22dp">
+
+            <TextView
+                android:id="@+id/coachTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="How to measure"
+                android:textColor="#F2F7F0"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:gravity="center" />
+
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="158dp"
+                android:layout_marginTop="14dp"
+                android:layout_marginBottom="14dp">
+
+                <!-- Window mode: window icon + a tap dot that sweeps edge to edge -->
+                <ImageView
+                    android:id="@+id/coachWindow"
+                    android:layout_width="92dp"
+                    android:layout_height="92dp"
+                    android:layout_gravity="center"
+                    android:src="@drawable/ic_window_frame"
+                    android:visibility="gone"
+                    android:contentDescription="Window" />
+
+                <!-- Floor line, shown only for the sill measurement (floor-to-sill) -->
+                <View
+                    android:id="@+id/coachFloor"
+                    android:layout_width="118dp"
+                    android:layout_height="3dp"
+                    android:layout_gravity="bottom|center_horizontal"
+                    android:layout_marginBottom="18dp"
+                    android:visibility="gone"
+                    android:background="@drawable/ar_coach_floor" />
+
+                <TextView
+                    android:id="@+id/coachTapWindow"
+                    android:layout_width="44dp"
+                    android:layout_height="44dp"
+                    android:layout_gravity="center"
+                    android:gravity="center"
+                    android:text="+"
+                    android:textColor="#0B1A11"
+                    android:textSize="23sp"
+                    android:textStyle="bold"
+                    android:visibility="gone"
+                    android:background="@drawable/ar_coach_tap" />
+
+                <!-- Plant mode: target ring on the floor + a plant that drops in -->
+                <ImageView
+                    android:id="@+id/coachRing"
+                    android:layout_width="58dp"
+                    android:layout_height="58dp"
+                    android:layout_gravity="center"
+                    android:src="@drawable/ar_reticle_drawable"
+                    android:visibility="gone"
+                    android:contentDescription="Spot" />
+
+                <ImageView
+                    android:id="@+id/coachPlant"
+                    android:layout_width="54dp"
+                    android:layout_height="54dp"
+                    android:layout_gravity="center"
+                    android:src="@drawable/ic_potted_plant"
+                    android:visibility="gone"
+                    android:contentDescription="Plant" />
+
+                <TextView
+                    android:id="@+id/coachTapPlant"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_gravity="bottom|center_horizontal"
+                    android:gravity="center"
+                    android:text="+"
+                    android:textColor="#0B1A11"
+                    android:textSize="24sp"
+                    android:textStyle="bold"
+                    android:visibility="gone"
+                    android:background="@drawable/ar_coach_tap" />
+
+                <!-- Lottie animation (preferred); falls back to the vector demo
+                     above if the asset is missing or fails to parse -->
+                <com.airbnb.lottie.LottieAnimationView
+                    android:id="@+id/coachLottie"
+                    android:layout_width="152dp"
+                    android:layout_height="152dp"
+                    android:layout_gravity="center"
+                    android:visibility="gone" />
+            </FrameLayout>
+
+            <TextView
+                android:id="@+id/coachSteps"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text=""
+                android:textColor="#94B09C"
+                android:textSize="14sp"
+                android:lineSpacingExtra="5dp" />
+
+            <TextView
+                android:id="@+id/coachDismiss"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:text="Got it"
+                android:textColor="#0B1A11"
+                android:textSize="15sp"
+                android:textStyle="bold"
+                android:paddingStart="36dp"
+                android:paddingEnd="36dp"
+                android:paddingTop="12dp"
+                android:paddingBottom="12dp"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="@drawable/ar_pill_active" />
+        </LinearLayout>
+    </FrameLayout>
 </FrameLayout>

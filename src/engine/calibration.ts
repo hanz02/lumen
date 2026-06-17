@@ -8,17 +8,24 @@ export interface LuxCalibration {
   slope: number;
   intercept: number;
   enabled: boolean;
+  /** Lower bound of the validated range; below this the intercept extrapolates unreliably. */
+  validMinLux?: number;
+  validMaxLux?: number;
 }
 
 /** Returns the lux value the engine should score with. Identity when the
- *  calibration is disabled; otherwise the linear fit, clamped at 0 and rounded
- *  to the nearest lux (sub-lux precision is below sensor resolution). */
+ *  calibration is disabled. Outside the validated range (200–6000 lx) the
+ *  large intercept over-predicts at low light, so the raw value is returned
+ *  instead — reported as-is, not calibrated. */
 export function applyLuxCalibration(
   rawLux: number,
   cal: LuxCalibration = LUX_CALIBRATION,
 ): number {
   if (!cal.enabled) {
     return rawLux;
+  }
+  if (cal.validMinLux != null && rawLux < cal.validMinLux) {
+    return Math.round(rawLux);
   }
   return Math.max(0, Math.round(cal.slope * rawLux + cal.intercept));
 }

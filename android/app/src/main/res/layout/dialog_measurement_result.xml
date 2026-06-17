@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Custom AR measurement-result card: replaces the default AlertDialog with
+     a frosted glass card over a dimmed camera feed, matching the in-app
+     botanical dark theme instead of the system grey dialog. Buttons are stacked
+     vertically: primary action on top, secondary below. -->
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="300dp"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/ar_glass_card_bg"
+    android:padding="24dp">
+
+    <TextView
+        android:id="@+id/resultTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="#F2F7F0"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/resultMessage"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:textColor="#94B09C"
+        android:textSize="14sp"
+        android:lineSpacingExtra="4dp" />
+
+    <!-- Primary action: accept the measurement -->
+    <TextView
+        android:id="@+id/useMeasurementButton"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:layout_marginTop="22dp"
+        android:gravity="center"
+        android:text="Use Measurement"
+        android:textColor="#0B1A11"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:clickable="true"
+        android:focusable="true"
+        android:background="@drawable/ar_glass_button_primary" />
+
+    <!-- Secondary action: discard and retry -->
+    <TextView
+        android:id="@+id/measureAgainButton"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:layout_marginTop="10dp"
+        android:gravity="center"
+        android:text="Measure Again"
+        android:textColor="#A9E8C3"
+        android:textSize="13sp"
+        android:textStyle="bold"
+        android:clickable="true"
+        android:focusable="true"
+        android:background="@drawable/ar_glass_button_secondary" />
+
+</LinearLayout>

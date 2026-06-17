@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- "Use Measurement" pill — bright leaf fill, matches buttonBase.primary. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="#56C17F" />
+    <corners android:radius="24dp" />
+</shape>

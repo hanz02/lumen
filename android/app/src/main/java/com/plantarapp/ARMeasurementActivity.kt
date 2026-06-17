@@ -1,6 +1,18 @@
 package com.plantarapp
 
+import android.animation.Animator
+import android.animation.Keyframe
+import android.animation.ObjectAnimator
+import android.animation.PropertyValuesHolder
+import android.animation.ValueAnimator
 import android.app.Activity
+import android.app.Dialog
+import android.view.animation.AccelerateDecelerateInterpolator
+import android.view.animation.AlphaAnimation
+import android.view.animation.Animation
+import android.view.animation.AnimationSet
+import android.view.animation.DecelerateInterpolator
+import android.view.animation.ScaleAnimation
 import android.content.Context
 import android.content.Intent
 import android.os.Build
@@ -12,10 +24,10 @@ import android.os.Vibrator
 import android.graphics.PorterDuff
 import android.graphics.drawable.GradientDrawable
 import android.view.View
+import android.view.WindowManager
 import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.google.ar.core.Anchor
 import com.google.ar.core.Config
@@ -36,9 +48,28 @@ import com.google.ar.sceneform.rendering.Material
 import com.google.ar.sceneform.rendering.MaterialFactory
 import com.google.ar.sceneform.rendering.ShapeFactory
 import com.google.ar.sceneform.ux.ArFragment
+import com.airbnb.lottie.LottieAnimationView
+import com.airbnb.lottie.LottieCompositionFactory
+import com.airbnb.lottie.LottieDrawable
 import kotlin.math.sqrt
 
 class ARMeasurementActivity : AppCompatActivity() {
+
+    private companion object {
+        /** Multi-frame snap burst: sample the centre hit across several frames
+         *  instead of trusting a single frame's jittery pose. */
+        const val BURST_TARGET_SAMPLES = 10
+        const val BURST_TIMEOUT_MS = 900L
+        const val BURST_MIN_SAMPLES = 4
+
+        /** Reject a lock whose samples scatter more than this (metres) — an
+         *  unstable surface lock would put cm-level error into the anchor. */
+        const val MAX_SNAP_SPREAD_M = 0.03f
+
+        /** Tools whose coach overlay has already been dismissed this app run, so
+         *  repeated captures (e.g. window width → height → sill) don't nag. */
+        val coachSeenTools = mutableSetOf<String>()
+    }
 
     private lateinit var arFragment: ArFragment
 
@@ -58,6 +89,21 @@ class ARMeasurementActivity : AppCompatActivity() {
 
     private var firstHitQuality: HitQuality? = null
     private var secondHitQuality: HitQuality? = null
+
+    /** Burst-sampling state: spread (mm) of each point's snap burst, and the
+     *  plane each point locked onto (cross-plane window spans get their
+     *  confidence downgraded — they can include a surface depth offset). */
+    private var firstSnapSpreadMm: Float? = null
+    private var secondSnapSpreadMm: Float? = null
+    private var firstHitPlane: Plane? = null
+    private var secondHitPlane: Plane? = null
+
+    private val burstHandler = Handler(Looper.getMainLooper())
+    private var burstInProgress = false
+
+    private var coachOverlay: View? = null
+    private val coachAnimators = mutableListOf<Animator>()
+    private var coachLottie: LottieAnimationView? = null
 
     private val placedMarkerNodes = mutableListOf<AnchorNode>()
 
@@ -105,6 +151,14 @@ class ARMeasurementActivity : AppCompatActivity() {
     private var isReticleReady = false
     private var currentReticleQuality: HitQuality? = null
 
+    /** Optional caller-supplied label ("Window WIDTH" etc.) echoed in the UI
+     *  and returned with the result so JS can route multi-step captures. */
+    private var measureLabel: String? = null
+
+    /** Which window dimension this session measures ("width"|"height"|"sill") —
+     *  selects the matching coach animation/steps. Null for plant distance. */
+    private var measureKind: String? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -114,6 +168,17 @@ class ARMeasurementActivity : AppCompatActivity() {
         windowMeasureModeButton = findViewById(R.id.windowMeasureModeButton)
         snapPointButton = findViewById(R.id.snapPointButton)
         resetButton = findViewById(R.id.resetButton)
+
+        currentTool = when (intent.getStringExtra("initial_tool")) {
+            MeasurementTool.WINDOW_MEASURE.name -> MeasurementTool.WINDOW_MEASURE
+            else -> MeasurementTool.PLANT_DISTANCE
+        }
+        measureLabel = intent.getStringExtra("measure_label")
+        measureKind = intent.getStringExtra("measure_kind")
+        if (intent.getBooleanExtra("lock_tool", false)) {
+            plantDistanceModeButton.visibility = View.GONE
+            windowMeasureModeButton.visibility = View.GONE
+        }
 
         statusText = findViewById(R.id.statusText)
         centerReticle = findViewById(R.id.centerReticle)
@@ -132,6 +197,281 @@ class ARMeasurementActivity : AppCompatActivity() {
         setStatusForCurrentToolStart()
         setReticleReady(false, null)
         startReticleMonitor()
+        setupCoach()
+    }
+
+    /**
+     * Animated "how to measure" overlay shown when the AR camera opens. The
+     * reticle pulses, a tap target throbs and an arrow bobs to demonstrate
+     * "aim, then press +", with tool-specific step text. Shown once per tool
+     * per app run; tap anywhere or "Got it" to dismiss.
+     */
+    private fun setupCoach() {
+        val overlay = findViewById<View>(R.id.coachOverlay)
+        coachOverlay = overlay
+
+        // Already dismissed for this tool this run — don't nag on repeat captures.
+        if (coachSeenTools.contains(currentTool.name)) {
+            overlay.visibility = View.GONE
+            return
+        }
+
+        val title = findViewById<TextView>(R.id.coachTitle)
+        val steps = findViewById<TextView>(R.id.coachSteps)
+        val dismiss = findViewById<TextView>(R.id.coachDismiss)
+
+        val coachWindow = findViewById<ImageView>(R.id.coachWindow)
+        val coachTapWindow = findViewById<TextView>(R.id.coachTapWindow)
+        val coachRing = findViewById<ImageView>(R.id.coachRing)
+        val coachPlant = findViewById<ImageView>(R.id.coachPlant)
+        val coachTapPlant = findViewById<TextView>(R.id.coachTapPlant)
+
+        when (currentTool) {
+            MeasurementTool.PLANT_DISTANCE -> {
+                title.text = "Measure the plant spot"
+                steps.text =
+                    "1.  Aim the ring at the floor where the plant will sit.\n" +
+                    "2.  Press + to drop the marker.\n" +
+                    "3.  Aim at the window base, press + again to measure."
+
+                coachRing.visibility = View.VISIBLE
+                coachPlant.visibility = View.VISIBLE
+                coachTapPlant.visibility = View.VISIBLE
+
+                coachAnimators.add(pulseForever(coachRing, 0.84f, 1.12f, 0.55f, 1f, 950L, 0L))
+                coachAnimators.add(plantDropAnimator(coachPlant))
+                coachAnimators.add(pulseForever(coachTapPlant, 0.82f, 1.16f, 0.7f, 1f, 760L, 260L))
+            }
+
+            MeasurementTool.WINDOW_MEASURE -> {
+                coachWindow.visibility = View.VISIBLE
+                coachTapWindow.visibility = View.VISIBLE
+
+                // The window icon breathes for every window measurement.
+                coachAnimators.add(
+                    ObjectAnimator.ofFloat(coachWindow, View.ALPHA, 0.62f, 1f).apply {
+                        duration = 1300L
+                        repeatCount = ValueAnimator.INFINITE
+                        repeatMode = ValueAnimator.REVERSE
+                        start()
+                    },
+                )
+
+                // Each dimension gets its own step text and tap-target motion, so
+                // the demonstrated gesture matches what is actually being measured.
+                when (measureKind) {
+                    "height" -> {
+                        title.text = measureLabel ?: "Measure the window height"
+                        steps.text =
+                            "1.  Aim at the bottom of the glass, press +.\n" +
+                            "2.  Aim at the top of the glass, press + again.\n" +
+                            "Tip:  lock onto the solid frame, not the glass."
+                        // tap target rises up the glass: bottom -> top
+                        coachAnimators.add(verticalTapAnimator(coachTapWindow, 34f, -34f))
+                    }
+                    "sill" -> {
+                        title.text = measureLabel ?: "Measure the sill height"
+                        steps.text =
+                            "1.  Aim at the floor directly below the window, press +.\n" +
+                            "2.  Aim at the bottom of the glass (the sill), press + again.\n" +
+                            "Tip:  this is the floor-to-sill height on the wall."
+                        // lift the window, reveal a floor line, and rise from the
+                        // floor up to the sill — the floor-to-window distance.
+                        coachWindow.translationY = -dp(26f)
+                        findViewById<View>(R.id.coachFloor).visibility = View.VISIBLE
+                        coachAnimators.add(verticalTapAnimator(coachTapWindow, 50f, 6f))
+                    }
+                    else -> {
+                        title.text = measureLabel ?: "Measure the window width"
+                        steps.text =
+                            "1.  Aim at one edge of the window frame, press +.\n" +
+                            "2.  Aim at the opposite edge, press + again.\n" +
+                            "Tip:  lock onto the solid frame, not the glass."
+                        // tap target sweeps across: left edge -> right edge
+                        coachAnimators.add(windowTapAnimator(coachTapWindow))
+                    }
+                }
+            }
+        }
+
+        // Prefer a Lottie animation if its asset is present and parses; the
+        // vector demo above is the fallback (kept running until Lottie loads,
+        // shown permanently if Lottie is missing or invalid).
+        val lottie = findViewById<LottieAnimationView>(R.id.coachLottie)
+        coachLottie = lottie
+        // Per-measurement Lottie assets; when one is absent (height/sill ship
+        // vector-only for now) the failure listener keeps the tailored vector
+        // animation above, so each measurement still looks distinct.
+        val assetName = when (currentTool) {
+            MeasurementTool.PLANT_DISTANCE -> "coach_plant.json"
+            MeasurementTool.WINDOW_MEASURE -> when (measureKind) {
+                "height" -> "coach_window_height.json"
+                "sill" -> "coach_window_sill.json"
+                else -> "coach_window_width.json"
+            }
+        }
+        LottieCompositionFactory.fromAsset(this, assetName)
+            .addListener { composition ->
+                lottie.setComposition(composition)
+                lottie.repeatCount = LottieDrawable.INFINITE
+                lottie.playAnimation()
+                coachAnimators.forEach { it.cancel() }
+                coachAnimators.clear()
+                hideCoachVectorViews()
+                lottie.visibility = View.VISIBLE
+            }
+            .addFailureListener {
+                lottie.visibility = View.GONE
+            }
+
+        overlay.setOnClickListener { dismissCoach() }
+        dismiss.setOnClickListener { dismissCoach() }
+    }
+
+    private fun hideCoachVectorViews() {
+        intArrayOf(
+            R.id.coachWindow,
+            R.id.coachTapWindow,
+            R.id.coachFloor,
+            R.id.coachRing,
+            R.id.coachPlant,
+            R.id.coachTapPlant,
+        ).forEach { findViewById<View>(it)?.visibility = View.GONE }
+    }
+
+    private fun dp(value: Float): Float = value * resources.displayMetrics.density
+
+    /** A potted plant drops from above onto the spot, holds, fades, and (while
+     *  invisible) returns to the top to repeat — a clean seamless loop. */
+    private fun plantDropAnimator(view: View): Animator {
+        val ty = PropertyValuesHolder.ofKeyframe(
+            View.TRANSLATION_Y,
+            Keyframe.ofFloat(0f, -dp(48f)),
+            Keyframe.ofFloat(0.42f, 0f),
+            Keyframe.ofFloat(0.8f, 0f),
+            Keyframe.ofFloat(0.81f, -dp(48f)),
+            Keyframe.ofFloat(1f, -dp(48f)),
+        )
+        val alpha = PropertyValuesHolder.ofKeyframe(
+            View.ALPHA,
+            Keyframe.ofFloat(0f, 0f),
+            Keyframe.ofFloat(0.16f, 1f),
+            Keyframe.ofFloat(0.72f, 1f),
+            Keyframe.ofFloat(0.8f, 0f),
+            Keyframe.ofFloat(1f, 0f),
+        )
+        return ObjectAnimator.ofPropertyValuesHolder(view, ty, alpha).apply {
+            duration = 2000L
+            interpolator = AccelerateDecelerateInterpolator()
+            repeatCount = ValueAnimator.INFINITE
+            start()
+        }
+    }
+
+    /** A tap target sweeps from the left edge to the right edge of the window
+     *  and pops a "tap" at each edge — demonstrating the two-point measure. */
+    private fun windowTapAnimator(view: View): Animator {
+        val tx = PropertyValuesHolder.ofKeyframe(
+            View.TRANSLATION_X,
+            Keyframe.ofFloat(0f, -dp(38f)),
+            Keyframe.ofFloat(0.42f, dp(38f)),
+            Keyframe.ofFloat(0.5f, dp(38f)),
+            Keyframe.ofFloat(0.92f, -dp(38f)),
+            Keyframe.ofFloat(1f, -dp(38f)),
+        )
+        val popX = PropertyValuesHolder.ofKeyframe(
+            View.SCALE_X,
+            Keyframe.ofFloat(0f, 1.35f),
+            Keyframe.ofFloat(0.12f, 1f),
+            Keyframe.ofFloat(0.42f, 1f),
+            Keyframe.ofFloat(0.5f, 1.35f),
+            Keyframe.ofFloat(0.62f, 1f),
+            Keyframe.ofFloat(1f, 1f),
+        )
+        val popY = PropertyValuesHolder.ofKeyframe(
+            View.SCALE_Y,
+            Keyframe.ofFloat(0f, 1.35f),
+            Keyframe.ofFloat(0.12f, 1f),
+            Keyframe.ofFloat(0.42f, 1f),
+            Keyframe.ofFloat(0.5f, 1.35f),
+            Keyframe.ofFloat(0.62f, 1f),
+            Keyframe.ofFloat(1f, 1f),
+        )
+        return ObjectAnimator.ofPropertyValuesHolder(view, tx, popX, popY).apply {
+            duration = 2600L
+            interpolator = AccelerateDecelerateInterpolator()
+            repeatCount = ValueAnimator.INFINITE
+            start()
+        }
+    }
+
+    /** A tap target sweeps vertically between two offsets (dp) and pops at each
+     *  end — used for window height (glass bottom -> top) and sill (floor ->
+     *  bottom of the glass), the vertical counterpart of [windowTapAnimator]. */
+    private fun verticalTapAnimator(view: View, fromDp: Float, toDp: Float): Animator {
+        val ty = PropertyValuesHolder.ofKeyframe(
+            View.TRANSLATION_Y,
+            Keyframe.ofFloat(0f, dp(fromDp)),
+            Keyframe.ofFloat(0.42f, dp(toDp)),
+            Keyframe.ofFloat(0.5f, dp(toDp)),
+            Keyframe.ofFloat(0.92f, dp(fromDp)),
+            Keyframe.ofFloat(1f, dp(fromDp)),
+        )
+        val popX = PropertyValuesHolder.ofKeyframe(
+            View.SCALE_X,
+            Keyframe.ofFloat(0f, 1.35f),
+            Keyframe.ofFloat(0.12f, 1f),
+            Keyframe.ofFloat(0.42f, 1f),
+            Keyframe.ofFloat(0.5f, 1.35f),
+            Keyframe.ofFloat(0.62f, 1f),
+            Keyframe.ofFloat(1f, 1f),
+        )
+        val popY = PropertyValuesHolder.ofKeyframe(
+            View.SCALE_Y,
+            Keyframe.ofFloat(0f, 1.35f),
+            Keyframe.ofFloat(0.12f, 1f),
+            Keyframe.ofFloat(0.42f, 1f),
+            Keyframe.ofFloat(0.5f, 1.35f),
+            Keyframe.ofFloat(0.62f, 1f),
+            Keyframe.ofFloat(1f, 1f),
+        )
+        return ObjectAnimator.ofPropertyValuesHolder(view, ty, popX, popY).apply {
+            duration = 2600L
+            interpolator = AccelerateDecelerateInterpolator()
+            repeatCount = ValueAnimator.INFINITE
+            start()
+        }
+    }
+
+    private fun pulseForever(
+        view: View,
+        scaleFrom: Float,
+        scaleTo: Float,
+        alphaFrom: Float,
+        alphaTo: Float,
+        durationMs: Long,
+        startDelayMs: Long,
+    ): Animator {
+        return ObjectAnimator.ofPropertyValuesHolder(
+            view,
+            PropertyValuesHolder.ofFloat(View.SCALE_X, scaleFrom, scaleTo),
+            PropertyValuesHolder.ofFloat(View.SCALE_Y, scaleFrom, scaleTo),
+            PropertyValuesHolder.ofFloat(View.ALPHA, alphaFrom, alphaTo),
+        ).apply {
+            duration = durationMs
+            startDelay = startDelayMs
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            start()
+        }
+    }
+
+    private fun dismissCoach() {
+        coachAnimators.forEach { it.cancel() }
+        coachAnimators.clear()
+        coachLottie?.cancelAnimation()
+        coachOverlay?.visibility = View.GONE
+        coachSeenTools.add(currentTool.name)
     }
 
     private fun hidePlaneVisuals() {
@@ -140,13 +480,26 @@ class ARMeasurementActivity : AppCompatActivity() {
         } catch (_: Exception) {
             // Keep AR running even if this Sceneform version handles plane rendering differently.
         }
+
+        // Remove Sceneform's default "hand holding a phone" instruction (the
+        // generic plane-discovery onboarding). It confuses users in our
+        // task-specific flow — our own status text guides them. The Gorisse
+        // fork exposes this through InstructionsController, not the upstream
+        // PlaneDiscoveryController.
+        try {
+            arFragment.instructionsController?.isEnabled = false
+        } catch (_: Exception) {
+            // Fork without an instructions controller.
+        }
     }
 
     private fun createMaterials() {
+        // Botanical palette, matching the React Native theme:
+        // leaf #56C17F, deep leaf #274F3A, amber #F4C84B, mint #A9E8C3.
         MaterialFactory.makeOpaqueWithColor(
             this,
             com.google.ar.sceneform.rendering.Color(
-                android.graphics.Color.rgb(111, 143, 78)
+                android.graphics.Color.rgb(86, 193, 127) // leaf
             )
         ).thenAccept { material ->
             firstMarkerMaterial = material
@@ -156,7 +509,7 @@ class ARMeasurementActivity : AppCompatActivity() {
         MaterialFactory.makeOpaqueWithColor(
             this,
             com.google.ar.sceneform.rendering.Color(
-                android.graphics.Color.rgb(47, 79, 53)
+                android.graphics.Color.rgb(39, 79, 58) // deep leaf (stem)
             )
         ).thenAccept { material ->
             plantStemMaterial = material
@@ -165,17 +518,17 @@ class ARMeasurementActivity : AppCompatActivity() {
         MaterialFactory.makeOpaqueWithColor(
             this,
             com.google.ar.sceneform.rendering.Color(
-                android.graphics.Color.rgb(246, 201, 69)
+                android.graphics.Color.rgb(244, 200, 75) // amber
             )
         ).thenAccept { material ->
             secondMarkerMaterial = material
             finalLineMaterial = material
         }
 
-        MaterialFactory.makeOpaqueWithColor(
+        MaterialFactory.makeTransparentWithColor(
             this,
             com.google.ar.sceneform.rendering.Color(
-                android.graphics.Color.argb(120, 255, 255, 255)
+                android.graphics.Color.argb(110, 169, 232, 195) // mint, translucent
             )
         ).thenAccept { material ->
             previewLineMaterial = material
@@ -184,7 +537,7 @@ class ARMeasurementActivity : AppCompatActivity() {
         MaterialFactory.makeTransparentWithColor(
             this,
             com.google.ar.sceneform.rendering.Color(
-                android.graphics.Color.argb(85, 246, 201, 69)
+                android.graphics.Color.argb(70, 86, 193, 127) // leaf, translucent
             )
         ).thenAccept { material ->
             plantPlacementRingMaterial = material
@@ -193,7 +546,7 @@ class ARMeasurementActivity : AppCompatActivity() {
         MaterialFactory.makeTransparentWithColor(
             this,
             com.google.ar.sceneform.rendering.Color(
-                android.graphics.Color.argb(95, 90, 255, 240)
+                android.graphics.Color.argb(70, 169, 232, 195) // mint, translucent
             )
         ).thenAccept { material ->
             windowDiscFillMaterial = material
@@ -202,7 +555,7 @@ class ARMeasurementActivity : AppCompatActivity() {
         MaterialFactory.makeOpaqueWithColor(
             this,
             com.google.ar.sceneform.rendering.Color(
-                android.graphics.Color.rgb(90, 255, 240)
+                android.graphics.Color.rgb(169, 232, 195) // mint (ring colour)
             )
         ).thenAccept { material ->
             windowDiscDotMaterial = material
@@ -214,6 +567,9 @@ class ARMeasurementActivity : AppCompatActivity() {
             config.lightEstimationMode = Config.LightEstimationMode.DISABLED
             config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
             config.updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
+            // Autofocus keeps near-range targets sharp -> better feature
+            // tracking and hit poses (Sceneform does not enable it reliably).
+            config.focusMode = Config.FocusMode.AUTO
 
             if (session.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
                 config.depthMode = Config.DepthMode.AUTOMATIC
@@ -287,6 +643,14 @@ class ARMeasurementActivity : AppCompatActivity() {
         val frame = sceneView.arFrame
 
         if (frame == null) {
+            setReticleReady(false, null)
+            clearMovingPreviews()
+            return
+        }
+
+        // Hit poses are unreliable while camera tracking is LIMITED/PAUSED
+        // (fast motion, low light) — don't offer a snap on them.
+        if (frame.camera.trackingState != TrackingState.TRACKING) {
             setReticleReady(false, null)
             clearMovingPreviews()
             return
@@ -433,65 +797,63 @@ class ARMeasurementActivity : AppCompatActivity() {
 
         val plantRoot = Node()
 
-        // Placement ring
+        // Flat placement footprint (thin translucent ring)
         val ringNode = Node()
-        ringNode.renderable = ShapeFactory.makeCylinder(0.10f, 0.003f, Vector3.zero(), ringMaterial)
-        ringNode.localPosition = Vector3(0f, 0.002f, 0f)
+        ringNode.renderable = ShapeFactory.makeCylinder(0.055f, 0.0014f, Vector3.zero(), ringMaterial)
+        ringNode.localPosition = Vector3(0f, 0.0008f, 0f)
         ringNode.setParent(plantRoot)
 
-        // Short stem
+        // Slim stem
         val stemNode = Node()
-        stemNode.renderable = ShapeFactory.makeCylinder(0.006f, 0.08f, Vector3.zero(), stemMaterial)
-        stemNode.localPosition = Vector3(0f, 0.05f, 0f)
+        stemNode.renderable = ShapeFactory.makeCylinder(0.0035f, 0.055f, Vector3.zero(), stemMaterial)
+        stemNode.localPosition = Vector3(0f, 0.0275f, 0f)
         stemNode.setParent(plantRoot)
 
-        // 3 compact leaves
+        // A tidy rosette of slim leaves fanning up and out, plus an upright
+        // centre leaf — reads as a small plant rather than a blob.
+        val outerLeaves = 5
+        for (i in 0 until outerLeaves) {
+            addLeafNode(
+                parent = plantRoot,
+                material = leafMaterial,
+                yawDegrees = (i.toFloat() / outerLeaves) * 360f,
+                tiltDegrees = 34f
+            )
+        }
         addLeafNode(
             parent = plantRoot,
             material = leafMaterial,
-            position = Vector3(-0.024f, 0.105f, 0f),
-            scale = Vector3(1.4f, 0.7f, 1.0f),
-            rotationDegrees = 18f
-        )
-
-        addLeafNode(
-            parent = plantRoot,
-            material = leafMaterial,
-            position = Vector3(0.024f, 0.105f, 0f),
-            scale = Vector3(1.4f, 0.7f, 1.0f),
-            rotationDegrees = -18f
-        )
-
-        addLeafNode(
-            parent = plantRoot,
-            material = leafMaterial,
-            position = Vector3(0f, 0.120f, 0f),
-            scale = Vector3(1.0f, 0.7f, 1.0f),
-            rotationDegrees = 0f
+            yawDegrees = 0f,
+            tiltDegrees = 0f
         )
 
         return plantRoot
     }
 
+    /** A slim, upright "leaf" — a flattened ellipsoid pivoted at its base so it
+     *  fans out by [tiltDegrees] and rotates around the plant by [yawDegrees]. */
     private fun addLeafNode(
         parent: Node,
         material: Material,
-        position: Vector3,
-        scale: Vector3,
-        rotationDegrees: Float
+        yawDegrees: Float,
+        tiltDegrees: Float
     ) {
-        val leafRenderable = ShapeFactory.makeSphere(
-            0.028f,
-            Vector3.zero(),
-            material
-        )
+        val leafRenderable = ShapeFactory.makeSphere(0.022f, Vector3.zero(), material)
+
+        // Inner pivot tilts/rotates; the leaf sits above the pivot so it leans
+        // from a common base point.
+        val pivot = Node()
+        pivot.localPosition = Vector3(0f, 0.06f, 0f)
+        val tilt = Quaternion.axisAngle(Vector3(1f, 0f, 0f), tiltDegrees)
+        val yaw = Quaternion.axisAngle(Vector3.up(), yawDegrees)
+        pivot.localRotation = Quaternion.multiply(yaw, tilt)
+        pivot.setParent(parent)
 
         val leafNode = Node()
         leafNode.renderable = leafRenderable
-        leafNode.localPosition = position
-        leafNode.localScale = scale
-        leafNode.localRotation = Quaternion.axisAngle(Vector3.up(), rotationDegrees)
-        leafNode.setParent(parent)
+        leafNode.localPosition = Vector3(0f, 0.026f, 0f)
+        leafNode.localScale = Vector3(0.62f, 1.7f, 0.32f)
+        leafNode.setParent(pivot)
     }
 
     private fun updateSecondPointPreview(hitPose: Pose) {
@@ -542,10 +904,10 @@ class ARMeasurementActivity : AppCompatActivity() {
      * outerMat = outer ring colour, accentMat = inner ring + dot colour.
      */
     private fun buildTargetMarker(root: Node, outerMat: Material, accentMat: Material) {
-        buildFlatRing(root, 48, 0.030f, 0.0042f, outerMat)
-        buildFlatRing(root, 36, 0.018f, 0.0032f, accentMat)
+        // One fine ring + a small centre dot — a minimal, flat target.
+        buildFlatRing(root, 64, 0.024f, 0.0016f, outerMat)
         val dot = Node()
-        dot.renderable = ShapeFactory.makeCylinder(0.006f, 0.001f, Vector3.zero(), accentMat)
+        dot.renderable = ShapeFactory.makeCylinder(0.0038f, 0.001f, Vector3.zero(), accentMat)
         dot.localPosition = Vector3.zero()
         dot.setParent(root)
     }
@@ -588,20 +950,22 @@ class ARMeasurementActivity : AppCompatActivity() {
         val centerX = sceneView.width / 2f
         val centerY = sceneView.height / 2f
 
-        val hitCandidate = findValidHit(frame.hitTest(centerX, centerY))
+        if (burstInProgress) return
 
-        if (hitCandidate != null) {
-            val anchor = hitCandidate.hitResult.createAnchor()
-            handlePointCaptured(anchor, hitCandidate.quality)
+        if (findValidHit(frame.hitTest(centerX, centerY)) != null) {
+            startSnapBurst(sceneView)
             return
         }
 
+        // Plant-mode fallback only: instant placement is a software-estimated
+        // pose, so burst-sampling it adds nothing — keep the single shot and
+        // its "Estimated" grade.
         if (currentTool == MeasurementTool.PLANT_DISTANCE) {
             val instantHits = frame.hitTestInstantPlacement(centerX, centerY, 1.5f)
 
             if (instantHits.isNotEmpty()) {
                 val anchor = instantHits.first().createAnchor()
-                handlePointCaptured(anchor, HitQuality.INSTANT_PLACEMENT)
+                handlePointCaptured(anchor, HitQuality.INSTANT_PLACEMENT, null, null)
                 return
             }
         }
@@ -613,6 +977,124 @@ class ARMeasurementActivity : AppCompatActivity() {
             MeasurementTool.WINDOW_MEASURE ->
                 setStatus("No window point found. Try a frame edge or tape marker.")
         }
+    }
+
+    /**
+     * Multi-frame snap: sample the centre-hit POSE across several frames to
+     * gauge how steadily the point is held — the same robust "median of steady
+     * samples" idea the lux capture uses (Ch 3 can describe one principle for
+     * both sensors). A burst whose samples scatter beyond MAX_SNAP_SPREAD_M is
+     * rejected outright (an unstable lock would bake cm-level error in).
+     *
+     * Only translations are stored during the burst — never the HitResults
+     * themselves. A HitResult / its createAnchor() is valid ONLY for the frame
+     * it came from, so the anchor is created from a single FRESH hit once the
+     * burst confirms the hold is steady. (Anchoring a stale HitResult is what
+     * crashed the previous build.)
+     */
+    private fun startSnapBurst(sceneView: ArSceneView) {
+        burstInProgress = true
+        snapPointButton.isEnabled = false
+        setStatus("Hold steady — locking point…")
+
+        val xs = mutableListOf<Float>()
+        val ys = mutableListOf<Float>()
+        val zs = mutableListOf<Float>()
+        val startedAt = System.currentTimeMillis()
+        var lastFrameTimestamp = 0L
+        val cx = sceneView.width / 2f
+        val cy = sceneView.height / 2f
+
+        val tick = object : Runnable {
+            override fun run() {
+                if (isFinishing || isDestroyed) {
+                    burstInProgress = false
+                    return
+                }
+
+                val frame = sceneView.arFrame
+                if (frame != null &&
+                    frame.timestamp != lastFrameTimestamp &&
+                    frame.camera.trackingState == TrackingState.TRACKING
+                ) {
+                    lastFrameTimestamp = frame.timestamp
+                    findValidHit(frame.hitTest(cx, cy))?.let {
+                        val p = it.hitResult.hitPose
+                        xs.add(p.tx())
+                        ys.add(p.ty())
+                        zs.add(p.tz())
+                    }
+                }
+
+                val elapsed = System.currentTimeMillis() - startedAt
+                if (xs.size >= BURST_TARGET_SAMPLES || elapsed >= BURST_TIMEOUT_MS) {
+                    finishSnapBurst(sceneView, xs, ys, zs)
+                } else {
+                    burstHandler.postDelayed(this, 50L)
+                }
+            }
+        }
+        burstHandler.post(tick)
+    }
+
+    private fun finishSnapBurst(
+        sceneView: ArSceneView,
+        xs: List<Float>,
+        ys: List<Float>,
+        zs: List<Float>
+    ) {
+        burstInProgress = false
+        snapPointButton.isEnabled = true
+
+        if (xs.size < BURST_MIN_SAMPLES) {
+            setStatus("Tracking too unstable to lock the point — try again.")
+            return
+        }
+
+        val mx = xs.sorted()[xs.size / 2]
+        val my = ys.sorted()[ys.size / 2]
+        val mz = zs.sorted()[zs.size / 2]
+
+        var spread = 0f
+        for (i in xs.indices) {
+            val dx = xs[i] - mx
+            val dy = ys[i] - my
+            val dz = zs[i] - mz
+            val d = sqrt(dx * dx + dy * dy + dz * dz)
+            if (d > spread) spread = d
+        }
+
+        if (spread > MAX_SNAP_SPREAD_M) {
+            setStatus(
+                "Point unstable (±%.0f mm) — hold steadier or pick a more textured spot."
+                    .format(spread * 1000f)
+            )
+            return
+        }
+
+        // Steady hold confirmed — anchor on a FRESH current-frame hit so
+        // createAnchor() is called on a hit from the live frame, never a stale
+        // one. After a steady burst this hit is ≈ the median anyway.
+        val frame = sceneView.arFrame
+        val fresh = if (frame != null &&
+            frame.camera.trackingState == TrackingState.TRACKING
+        ) {
+            findValidHit(frame.hitTest(sceneView.width / 2f, sceneView.height / 2f))
+        } else {
+            null
+        }
+
+        if (fresh == null) {
+            setStatus("Lost the point — aim again and press +.")
+            return
+        }
+
+        handlePointCaptured(
+            fresh.hitResult.createAnchor(),
+            fresh.quality,
+            spread * 1000f,
+            fresh.hitResult.trackable as? Plane
+        )
     }
 
     private fun findValidHit(hitResults: List<HitResult>): HitCandidate? {
@@ -635,14 +1117,17 @@ class ARMeasurementActivity : AppCompatActivity() {
                     }
                 }
 
+                // hitTest results are sorted nearest-first; keep the FIRST
+                // valid depth/feature hit (the old overwrite kept the last,
+                // i.e. the farthest — possibly a surface behind the target).
                 is DepthPoint -> {
-                    if (trackable.trackingState == TrackingState.TRACKING) {
+                    if (depthHit == null && trackable.trackingState == TrackingState.TRACKING) {
                         depthHit = hit
                     }
                 }
 
                 is Point -> {
-                    if (trackable.trackingState == TrackingState.TRACKING) {
+                    if (pointHit == null && trackable.trackingState == TrackingState.TRACKING) {
                         pointHit = hit
                     }
                 }
@@ -667,7 +1152,12 @@ class ARMeasurementActivity : AppCompatActivity() {
         }
     }
 
-    private fun handlePointCaptured(anchor: Anchor, quality: HitQuality) {
+    private fun handlePointCaptured(
+        anchor: Anchor,
+        quality: HitQuality,
+        snapSpreadMm: Float?,
+        hitPlane: Plane?
+    ) {
         vibrateSuccess()
 
         if (firstAnchor == null) {
@@ -685,6 +1175,8 @@ class ARMeasurementActivity : AppCompatActivity() {
 
                     firstAnchor = anchor
                     firstHitQuality = quality
+                    firstSnapSpreadMm = snapSpreadMm
+                    firstHitPlane = hitPlane
 
                     setStatus("Plant placed. Aim at the window or floor reference point and press +.")
                 }
@@ -695,6 +1187,8 @@ class ARMeasurementActivity : AppCompatActivity() {
 
                     firstAnchor = anchor
                     firstHitQuality = quality
+                    firstSnapSpreadMm = snapSpreadMm
+                    firstHitPlane = hitPlane
 
                     placeMarker(anchor, isFirstPoint = true)
 
@@ -708,6 +1202,8 @@ class ARMeasurementActivity : AppCompatActivity() {
         if (secondAnchor == null) {
             secondAnchor = anchor
             secondHitQuality = quality
+            secondSnapSpreadMm = snapSpreadMm
+            secondHitPlane = hitPlane
 
             removeSecondPointPreview()
             removeWindowPreview()
@@ -717,24 +1213,73 @@ class ARMeasurementActivity : AppCompatActivity() {
             removePreviewLine()
             drawFinalLine(firstAnchor!!, secondAnchor!!)
 
-            val distanceMeters = calculateDistance(firstAnchor!!, secondAnchor!!)
-            val distanceCm = distanceMeters * 100f
-            val overallQuality = getOverallQuality(firstHitQuality, secondHitQuality)
-
-            liveMeasurementBadge.text = if (distanceMeters >= 1f) "%.2f m".format(distanceMeters)
-                                        else "%.0f cm".format(distanceCm)
-            liveMeasurementBadge.visibility = View.VISIBLE
-
-            when (currentTool) {
-                MeasurementTool.PLANT_DISTANCE ->
-                    setStatus("Plant-to-reference distance: %.1f cm".format(distanceCm))
-
-                MeasurementTool.WINDOW_MEASURE ->
-                    setStatus("Window measurement: %.1f cm".format(distanceCm))
-            }
-
-            showDistanceDialog(distanceMeters, overallQuality)
+            setStatus("Refining measurement…")
+            startDistanceSettle()
         }
+    }
+
+    /** Anchor poses keep refining for a moment after creation; median the
+     *  anchor-to-anchor distance over a short settle window instead of
+     *  freezing the value at the instant of the second tap. */
+    private fun startDistanceSettle() {
+        val first = firstAnchor ?: return
+        val second = secondAnchor ?: return
+
+        val straight = mutableListOf<Float>()
+        val horizontal = mutableListOf<Float>()
+        val startedAt = System.currentTimeMillis()
+
+        val tick = object : Runnable {
+            override fun run() {
+                if (isFinishing || isDestroyed) return
+
+                val p1 = first.pose
+                val p2 = second.pose
+                val dx = p1.tx() - p2.tx()
+                val dy = p1.ty() - p2.ty()
+                val dz = p1.tz() - p2.tz()
+                straight.add(sqrt(dx * dx + dy * dy + dz * dz))
+                horizontal.add(sqrt(dx * dx + dz * dz)) // ARCore world Y = gravity-up
+
+                if (System.currentTimeMillis() - startedAt >= 600L) {
+                    finishDistanceSettle(
+                        straight.sorted()[straight.size / 2],
+                        horizontal.sorted()[horizontal.size / 2]
+                    )
+                } else {
+                    burstHandler.postDelayed(this, 50L)
+                }
+            }
+        }
+        burstHandler.post(tick)
+    }
+
+    private fun finishDistanceSettle(distanceMeters: Float, horizontalMeters: Float) {
+        val distanceCm = distanceMeters * 100f
+
+        // Two window points on DIFFERENT detected planes can include a depth
+        // offset between the surfaces — downgrade the stated confidence.
+        val planeMismatch = currentTool == MeasurementTool.WINDOW_MEASURE &&
+            firstHitPlane != null && secondHitPlane != null &&
+            firstHitPlane !== secondHitPlane
+        var overallQuality = getOverallQuality(firstHitQuality, secondHitQuality)
+        if (planeMismatch && overallQuality == HitQuality.PLANE) {
+            overallQuality = HitQuality.DEPTH
+        }
+
+        liveMeasurementBadge.text = if (distanceMeters >= 1f) "%.2f m".format(distanceMeters)
+                                    else "%.0f cm".format(distanceCm)
+        liveMeasurementBadge.visibility = View.VISIBLE
+
+        when (currentTool) {
+            MeasurementTool.PLANT_DISTANCE ->
+                setStatus("Plant-to-window: %.1f cm horizontal".format(horizontalMeters * 100f))
+
+            MeasurementTool.WINDOW_MEASURE ->
+                setStatus("Window measurement: %.1f cm".format(distanceCm))
+        }
+
+        showDistanceDialog(distanceMeters, horizontalMeters, overallQuality, planeMismatch)
     }
 
     private fun placeMarker(anchor: Anchor, isFirstPoint: Boolean) {
@@ -884,43 +1429,92 @@ class ARMeasurementActivity : AppCompatActivity() {
         return sqrt(dx * dx + dy * dy + dz * dz)
     }
 
-    private fun showDistanceDialog(distanceMeters: Float, overallQuality: HitQuality) {
+    private fun showDistanceDialog(
+        distanceMeters: Float,
+        horizontalMeters: Float,
+        overallQuality: HitQuality,
+        planeMismatch: Boolean
+    ) {
         val distanceCm = distanceMeters * 100f
 
         val title = when (currentTool) {
             MeasurementTool.PLANT_DISTANCE -> "Plant Placement Distance"
-            MeasurementTool.WINDOW_MEASURE -> "Window Measurement"
+            MeasurementTool.WINDOW_MEASURE -> measureLabel ?: "Window Measurement"
         }
 
         val message = when (currentTool) {
+            // Horizontal leads: the tape-validation protocol measures along
+            // the floor, and distance-from-window in the light sense is
+            // horizontal — the 3D line inflates with the reference height.
             MeasurementTool.PLANT_DISTANCE ->
-                "Distance: %.1f cm\nConfidence: %s".format(
+                "Horizontal distance: %.1f cm\nStraight line (3D): %.1f cm\nConfidence: %s".format(
+                    horizontalMeters * 100f,
                     distanceCm,
                     confidenceLabel(overallQuality)
                 )
 
             MeasurementTool.WINDOW_MEASURE ->
-                "Measurement: %.1f cm\nConfidence: %s".format(
+                "Measurement: %.1f cm\nConfidence: %s%s".format(
                     distanceCm,
-                    confidenceLabel(overallQuality)
+                    confidenceLabel(overallQuality),
+                    if (planeMismatch)
+                        "\nNote: the two points locked onto different surfaces — verify with tape."
+                    else ""
                 )
         }
 
-        AlertDialog.Builder(this)
-            .setTitle(title)
-            .setMessage(message)
-            .setPositiveButton("Use Measurement") { _, _ ->
-                returnDistanceToReactNative(distanceMeters, overallQuality)
-            }
-            .setNegativeButton("Measure Again") { _, _ ->
-                resetMeasurement()
-                setStatusForCurrentToolStart()
-            }
-            .setCancelable(false)
-            .show()
+        val view = layoutInflater.inflate(R.layout.dialog_measurement_result, null)
+        view.findViewById<TextView>(R.id.resultTitle).text = title
+        view.findViewById<TextView>(R.id.resultMessage).text = message
+
+        // Custom Dialog instead of AlertDialog: a transparent window lets the
+        // frosted glass card (dialog_measurement_result.xml) sit over a more
+        // heavily dimmed camera feed, matching the in-app dark theme instead
+        // of the system grey dialog.
+        val dialog = Dialog(this)
+        dialog.setContentView(view)
+        dialog.setCancelable(false)
+        dialog.window?.apply {
+            setBackgroundDrawableResource(android.R.color.transparent)
+            addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            setDimAmount(0.7f)
+        }
+
+        view.findViewById<View>(R.id.useMeasurementButton).setOnClickListener {
+            dialog.dismiss()
+            returnDistanceToReactNative(
+                distanceMeters, horizontalMeters, overallQuality, planeMismatch
+            )
+        }
+        view.findViewById<View>(R.id.measureAgainButton).setOnClickListener {
+            dialog.dismiss()
+            resetMeasurement()
+            setStatusForCurrentToolStart()
+        }
+
+        dialog.show()
+
+        // Popup entrance: scale from 88% + fade in, gives the card a natural
+        // "pop" without feeling jarring on a dark camera feed.
+        val popScale = ScaleAnimation(
+            0.88f, 1f, 0.88f, 1f,
+            Animation.RELATIVE_TO_SELF, 0.5f,
+            Animation.RELATIVE_TO_SELF, 0.5f
+        ).apply { duration = 240 }
+        val popAlpha = AlphaAnimation(0f, 1f).apply { duration = 200 }
+        val popSet = AnimationSet(false).apply {
+            addAnimation(popScale)
+            addAnimation(popAlpha)
+            interpolator = DecelerateInterpolator(1.6f)
+        }
+        view.startAnimation(popSet)
     }
 
     private fun resetMeasurement() {
+        burstHandler.removeCallbacksAndMessages(null)
+        burstInProgress = false
+        snapPointButton.isEnabled = true
+
         firstAnchor?.detach()
         secondAnchor?.detach()
 
@@ -928,6 +1522,10 @@ class ARMeasurementActivity : AppCompatActivity() {
         secondAnchor = null
         firstHitQuality = null
         secondHitQuality = null
+        firstSnapSpreadMm = null
+        secondSnapSpreadMm = null
+        firstHitPlane = null
+        secondHitPlane = null
 
         placedMarkerNodes.forEach { node ->
             node.setParent(null)
@@ -946,14 +1544,28 @@ class ARMeasurementActivity : AppCompatActivity() {
         liveMeasurementBadge.visibility = View.GONE
     }
 
-    private fun returnDistanceToReactNative(distanceMeters: Float, overallQuality: HitQuality) {
+    private fun returnDistanceToReactNative(
+        distanceMeters: Float,
+        horizontalMeters: Float,
+        overallQuality: HitQuality,
+        planeMismatch: Boolean
+    ) {
         val resultIntent = Intent().apply {
             putExtra("distance_meters", distanceMeters)
             putExtra("distance_cm", distanceMeters * 100f)
+            putExtra("horizontal_distance_meters", horizontalMeters)
+            putExtra("horizontal_distance_cm", horizontalMeters * 100f)
             putExtra("measurement_tool", currentTool.name)
+            putExtra("measure_label", measureLabel ?: "")
             putExtra("overall_quality", overallQuality.name)
             putExtra("first_point_quality", firstHitQuality?.name ?: "UNKNOWN")
             putExtra("second_point_quality", secondHitQuality?.name ?: "UNKNOWN")
+            // -1 when a point skipped the burst (instant-placement fallback)
+            putExtra(
+                "max_snap_spread_mm",
+                maxOf(firstSnapSpreadMm ?: -1f, secondSnapSpreadMm ?: -1f)
+            )
+            putExtra("plane_mismatch", planeMismatch)
         }
 
         setResult(Activity.RESULT_OK, resultIntent)
@@ -987,8 +1599,10 @@ class ARMeasurementActivity : AppCompatActivity() {
             MeasurementTool.PLANT_DISTANCE ->
                 setStatus("Move the plant onto the floor placement spot, then press +.")
 
-            MeasurementTool.WINDOW_MEASURE ->
-                setStatus("Aim the disc at a window-frame or wall marker, then press +.")
+            MeasurementTool.WINDOW_MEASURE -> {
+                val prefix = measureLabel?.let { "$it — " } ?: ""
+                setStatus("${prefix}Aim the disc at a window-frame or wall marker, then press +.")
+            }
         }
     }
 
@@ -1017,30 +1631,24 @@ class ARMeasurementActivity : AppCompatActivity() {
             snapPointButton.isEnabled = true
             snapPointButton.alpha = 1f
 
-            val reticleTint = when (quality) {
-                HitQuality.PLANE -> android.graphics.Color.rgb(246, 201, 69)
-                HitQuality.DEPTH -> android.graphics.Color.rgb(91, 160, 104)
-                HitQuality.FEATURE_POINT -> android.graphics.Color.rgb(224, 112, 96)
-                HitQuality.INSTANT_PLACEMENT -> android.graphics.Color.WHITE
-                null -> android.graphics.Color.rgb(246, 201, 69)
+            // Colour encodes hit quality: green = high, amber = medium,
+            // coral = low, mint = estimated. Reticle and dot use the same key.
+            val qualityColor = when (quality) {
+                HitQuality.PLANE -> android.graphics.Color.rgb(86, 193, 127) // leaf
+                HitQuality.DEPTH -> android.graphics.Color.rgb(244, 200, 75) // amber
+                HitQuality.FEATURE_POINT -> android.graphics.Color.rgb(233, 122, 102) // coral
+                HitQuality.INSTANT_PLACEMENT -> android.graphics.Color.rgb(169, 232, 195) // mint
+                null -> android.graphics.Color.rgb(169, 232, 195)
             }
-            centerReticle.setColorFilter(reticleTint, PorterDuff.Mode.SRC_IN)
-
-            val dotColor = when (quality) {
-                HitQuality.PLANE -> android.graphics.Color.rgb(91, 160, 104)
-                HitQuality.DEPTH -> android.graphics.Color.rgb(246, 201, 69)
-                HitQuality.FEATURE_POINT -> android.graphics.Color.rgb(224, 112, 96)
-                HitQuality.INSTANT_PLACEMENT -> android.graphics.Color.rgb(141, 174, 150)
-                null -> android.graphics.Color.rgb(141, 174, 150)
-            }
-            (confidenceDot.background as? GradientDrawable)?.setColor(dotColor)
+            centerReticle.setColorFilter(qualityColor, PorterDuff.Mode.SRC_IN)
+            (confidenceDot.background as? GradientDrawable)?.setColor(qualityColor)
         } else {
             centerReticle.visibility = View.INVISIBLE
             reticleLoading.visibility = View.VISIBLE
             snapPointButton.isEnabled = false
             snapPointButton.alpha = 0.45f
             (confidenceDot.background as? GradientDrawable)?.setColor(
-                android.graphics.Color.rgb(58, 87, 72)
+                android.graphics.Color.rgb(37, 66, 46) // hairline (idle)
             )
         }
     }
@@ -1073,6 +1681,10 @@ class ARMeasurementActivity : AppCompatActivity() {
         reticleRunnable?.let {
             reticleHandler.removeCallbacks(it)
         }
+
+        coachAnimators.forEach { it.cancel() }
+        coachAnimators.clear()
+        coachLottie?.cancelAnimation()
 
         removePlantPreview()
         removePlacedPlant()

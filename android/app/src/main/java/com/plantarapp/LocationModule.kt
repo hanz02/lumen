@@ -1,0 +1,158 @@
+package com.plantarapp
+
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.hardware.GeomagneticField
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import android.os.Handler
+import android.os.Looper
+import androidx.core.content.ContextCompat
+import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.ReactContextBaseJavaModule
+import com.facebook.react.bridge.ReactMethod
+
+/**
+ * One-shot coarse position for the solar (SPA) direct-sun estimate. Sun
+ * azimuth changes ~0.01°/km, so city-level accuracy is ample. Also returns
+ * the magnetic declination at that position (GeomagneticField) so JS can
+ * convert the compass's magnetic azimuth to true north.
+ *
+ * JS must request ACCESS_COARSE_LOCATION via PermissionsAndroid BEFORE
+ * calling getCurrentPosition.
+ */
+class LocationModule(private val reactContext: ReactApplicationContext) :
+    ReactContextBaseJavaModule(reactContext) {
+
+    companion object {
+        private const val E_NO_PERMISSION = "E_NO_PERMISSION"
+        private const val E_NO_LOCATION = "E_NO_LOCATION"
+        private const val FRESH_ENOUGH_MS = 30L * 60L * 1000L
+        private const val SINGLE_UPDATE_TIMEOUT_MS = 15_000L
+    }
+
+    private val locationManager: LocationManager by lazy {
+        reactContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    }
+
+    override fun getName(): String {
+        return "LocationModule"
+    }
+
+    private fun hasPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            reactContext, Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(
+                reactContext, Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun bestLastKnown(): Location? {
+        var best: Location? = null
+        for (provider in locationManager.allProviders) {
+            try {
+                val loc = locationManager.getLastKnownLocation(provider) ?: continue
+                if (best == null || loc.time > best!!.time) best = loc
+            } catch (_: SecurityException) {
+                // provider needs a permission tier we don't hold — skip
+            }
+        }
+        return best
+    }
+
+    private fun resolveWith(promise: Promise, loc: Location, source: String) {
+        val declination = GeomagneticField(
+            loc.latitude.toFloat(),
+            loc.longitude.toFloat(),
+            loc.altitude.toFloat(),
+            System.currentTimeMillis()
+        ).declination
+
+        val result = Arguments.createMap().apply {
+            putDouble("latitude", loc.latitude)
+            putDouble("longitude", loc.longitude)
+            putDouble("declinationDeg", declination.toDouble())
+            putDouble("ageMs", (System.currentTimeMillis() - loc.time).toDouble())
+            putString("source", source)
+        }
+        promise.resolve(result)
+    }
+
+    @ReactMethod
+    fun getCurrentPosition(promise: Promise) {
+        if (!hasPermission()) {
+            promise.reject(E_NO_PERMISSION, "Location permission not granted.")
+            return
+        }
+
+        val cached = bestLastKnown()
+        if (cached != null &&
+            System.currentTimeMillis() - cached.time < FRESH_ENOUGH_MS
+        ) {
+            resolveWith(promise, cached, "last_known")
+            return
+        }
+
+        // No fresh fix — request a single update, falling back to any stale
+        // cached fix (sun angles barely care), then failing honestly.
+        val provider = listOf(
+            LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER
+        ).firstOrNull { locationManager.allProviders.contains(it) }
+        if (provider == null) {
+            if (cached != null) resolveWith(promise, cached, "last_known_stale")
+            else promise.reject(E_NO_LOCATION, "No location provider available.")
+            return
+        }
+
+        val handler = Handler(Looper.getMainLooper())
+        var settled = false
+
+        val listener = object : LocationListener {
+            override fun onLocationChanged(location: Location) {
+                if (settled) return
+                settled = true
+                locationManager.removeUpdates(this)
+                resolveWith(promise, location, provider)
+            }
+
+            @Deprecated("Deprecated in API 29, still invoked on older devices")
+            override fun onStatusChanged(p: String?, s: Int, e: android.os.Bundle?) = Unit
+            override fun onProviderEnabled(p: String) = Unit
+            override fun onProviderDisabled(p: String) = Unit
+        }
+
+        try {
+            handler.post {
+                try {
+                    locationManager.requestLocationUpdates(provider, 0L, 0f, listener)
+                } catch (e: SecurityException) {
+                    if (!settled) {
+                        settled = true
+                        promise.reject(E_NO_PERMISSION, e)
+                    }
+                }
+            }
+            handler.postDelayed({
+                if (!settled) {
+                    settled = true
+                    locationManager.removeUpdates(listener)
+                    if (cached != null) resolveWith(promise, cached, "last_known_stale")
+                    else promise.reject(
+                        E_NO_LOCATION,
+                        "Could not get a position fix (indoors without network location?)."
+                    )
+                }
+            }, SINGLE_UPDATE_TIMEOUT_MS)
+        } catch (e: Exception) {
+            if (!settled) {
+                settled = true
+                promise.reject(E_NO_LOCATION, e)
+            }
+        }
+    }
+}

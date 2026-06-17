@@ -81,6 +81,13 @@ const ZONE_CLASS_FIT: Record<DistanceZone, Record<'low' | 'medium' | 'high', num
   deep: { high: 0.4, medium: 0.7, low: 1.0 },
 };
 
+/** Plain-language name for each distance band (used in the recommendation "why"). */
+const ZONE_WORDS: Record<DistanceZone, string> = {
+  near: 'a close-up spot',
+  mid: 'a mid-distance spot',
+  deep: 'a spot well back from the window',
+};
+
 function distanceFactor(spot: SpotInput, p: Plant): FactorScore {
   if (spot.distanceToWindowM == null) {
     return { value: 0, available: false, note: 'No window distance measured.' };
@@ -90,7 +97,7 @@ function distanceFactor(spot: SpotInput, p: Plant): FactorScore {
   return {
     value: ZONE_CLASS_FIT[zone][cls],
     available: true,
-    note: `${zone}-window zone vs ${cls}-light plant.`,
+    note: `That is ${ZONE_WORDS[zone]} for a ${cls}-light plant.`,
   };
 }
 
