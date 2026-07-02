@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Exposes the app's filesDir root (where EvalLogModule writes the eval CSV)
+     to FileProvider, so the share-sheet export can attach a real file. -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <files-path name="eval_logs" path="." />
+</paths>

@@ -68,4 +68,28 @@ describe('mapRowToPlant', () => {
     const plant = mapRowToPlant({ ...ZZ_ROW, maintenance_lux_min: NaN });
     expect(plant.maintenance_lux_min).toBeNull();
   });
+
+  it('builds the display-only reference object from DLI/PPFD/photoperiod', () => {
+    const plant = mapRowToPlant({
+      ...ZZ_ROW,
+      dli_min: 2,
+      dli_max: 5,
+      photoperiod_min: 8,
+      photoperiod_max: 12,
+      preferred_ppfd_min: 30,
+      preferred_ppfd_max: 60,
+    });
+    expect(plant.reference).not.toBeNull();
+    expect(plant.reference?.dliMin).toBe(2);
+    expect(plant.reference?.dliMax).toBe(5);
+    expect(plant.reference?.photoperiodMin).toBe(8);
+    expect(plant.reference?.preferredPpfdMax).toBe(60);
+    // absent PPFD bound stays null, never 0
+    expect(plant.reference?.maintenancePpfdMin).toBeNull();
+  });
+
+  it('returns a null reference when the plant has no DLI/PPFD/photoperiod data', () => {
+    // ZZ_ROW carries none of the enrichment columns
+    expect(mapRowToPlant(ZZ_ROW).reference).toBeNull();
+  });
 });

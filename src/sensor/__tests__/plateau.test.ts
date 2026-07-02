@@ -142,14 +142,49 @@ describe('extractPlateauReading', () => {
     expect(extractPlateauReading([], 10000)).toBeNull();
   });
 
-  it('short-but-valid plateau in a messy capture is only fair quality', () => {
-    // 8 s of wild swinging, then just 2 s steady at the end.
+  it('rejects a short trailing plateau in an otherwise messy capture (coverage too low)', () => {
+    // 8 s of wild swinging, then just 2 s steady at the end -> 20% coverage,
+    // below minCoverage (35%). A single calm tail is not enough evidence the
+    // user genuinely held the phone still for the capture as a whole.
     const swings: Array<{ ms: number; lux: number }> = [];
     for (let i = 0; i < 16; i++) {
       swings.push({ ms: 500, lux: i % 2 === 0 ? 300 : 3000 });
     }
     const { samples, endMs } = dense([...swings, { ms: 2000, lux: 800 }]);
+    expect(extractPlateauReading(samples, endMs)).toBeNull();
+  });
+
+  it('rejects a 30%-coverage plateau (field case: 3.0 s calm out of 10 s disrupted)', () => {
+    // Mirrors a real device test: ~7 s of disruption, then a 3.0 s calm tail
+    // (30% coverage) — below minCoverage (35%), so this must now reject.
+    const swings: Array<{ ms: number; lux: number }> = [];
+    for (let i = 0; i < 14; i++) {
+      swings.push({ ms: 500, lux: i % 2 === 0 ? 300 : 3000 });
+    }
+    const { samples, endMs } = dense([...swings, { ms: 3000, lux: 800 }]);
+    expect(extractPlateauReading(samples, endMs)).toBeNull();
+  });
+
+  it('rejects a 14%-coverage plateau (field case: 1.4 s calm out of 10 s disrupted)', () => {
+    // Mirrors a real device test: ~8.6 s of disruption, then a 1.4 s calm
+    // tail (14% coverage) — well below minCoverage (35%).
+    const swings: Array<{ ms: number; lux: number }> = [];
+    for (let i = 0; i < 17; i++) {
+      swings.push({ ms: 500, lux: i % 2 === 0 ? 10 : 200 });
+    }
+    const { samples, endMs } = dense([...swings, { ms: 1400, lux: 5 }]);
+    expect(extractPlateauReading(samples, endMs)).toBeNull();
+  });
+
+  it('still accepts a plateau just above the coverage floor (40% — fair, not rejected)', () => {
+    // 6 s disrupted, then 4 s calm (40% coverage) clears the 35% floor.
+    const swings: Array<{ ms: number; lux: number }> = [];
+    for (let i = 0; i < 12; i++) {
+      swings.push({ ms: 500, lux: i % 2 === 0 ? 300 : 3000 });
+    }
+    const { samples, endMs } = dense([...swings, { ms: 4000, lux: 800 }]);
     const reading = extractPlateauReading(samples, endMs);
+    expect(reading).not.toBeNull();
     expect(reading!.lux).toBe(800);
     expect(reading!.quality).toBe('fair');
   });

@@ -1,0 +1,82 @@
+================================================================================
+00 — FILE MAP with [APP]/[EVAL] tag and line count
+Rule: src/** and android/** = [APP].  tools/eval/** , tools/*.py , tools/analysis_output/** = [EVAL] (Chapter 5).
+      __tests__ are [APP] supporting tests EXCEPT tools/eval tests which are [EVAL].
+================================================================================
+[APP]      1378  ./App.tsx
+[APP]        13  ./__tests__/App.test.tsx
+[APP]      1774  ./android/app/src/main/java/com/plantarapp/ARMeasurementActivity.kt
+[APP]       152  ./android/app/src/main/java/com/plantarapp/ARModule.kt
+[APP]        27  ./android/app/src/main/java/com/plantarapp/ARPackage.kt
+[APP]       154  ./android/app/src/main/java/com/plantarapp/CompassModule.kt
+[APP]       125  ./android/app/src/main/java/com/plantarapp/EvalLogModule.kt
+[APP]        96  ./android/app/src/main/java/com/plantarapp/LightSensorModule.kt
+[APP]       158  ./android/app/src/main/java/com/plantarapp/LocationModule.kt
+[APP]        22  ./android/app/src/main/java/com/plantarapp/MainActivity.kt
+[APP]        28  ./android/app/src/main/java/com/plantarapp/MainApplication.kt
+[APP]       117  ./android/app/src/main/java/com/plantarapp/PlantDataModule.kt
+[APP]        62  ./src/ar/arMeasurement.ts
+[APP]       406  ./src/components/AspectCaptureCard.tsx
+[APP]       990  ./src/components/DirectSunCard.tsx
+[APP]       446  ./src/components/EvaluationCard.tsx
+[APP]       355  ./src/components/LightCaptureCard.tsx
+[APP]       343  ./src/components/LightConditionsModal.tsx
+[APP]       883  ./src/components/RecommendationList.tsx
+[APP]       424  ./src/components/SpotDistanceCard.tsx
+[APP]       556  ./src/components/WindowMeasureCard.tsx
+[APP]        95  ./src/data/__tests__/mapPlant.test.ts
+[APP]       103  ./src/data/mapPlant.ts
+[APP]        35  ./src/data/plantStore.ts
+[APP]        47  ./src/engine/__tests__/calibration.test.ts
+[APP]        87  ./src/engine/__tests__/fixtures.ts
+[APP]       203  ./src/engine/__tests__/recommend.test.ts
+[APP]        31  ./src/engine/calibration.ts
+[APP]        69  ./src/engine/config.ts
+[APP]       156  ./src/engine/explain.ts
+[APP]        47  ./src/engine/gates.ts
+[APP]        10  ./src/engine/index.ts
+[APP]        66  ./src/engine/lightFit.ts
+[APP]       118  ./src/engine/recommend.ts
+[APP]       141  ./src/engine/scoring.ts
+[APP]       117  ./src/engine/types.ts
+[APP]       216  ./src/eval/__tests__/evalRow.test.ts
+[APP]        47  ./src/eval/evalLog.ts
+[APP]       233  ./src/eval/evalRow.ts
+[APP]        49  ./src/location/location.ts
+[APP]        58  ./src/sensor/__tests__/cardinal.test.ts
+[APP]        22  ./src/sensor/__tests__/circularMean.test.ts
+[APP]       222  ./src/sensor/__tests__/plateau.test.ts
+[APP]        56  ./src/sensor/cardinal.ts
+[APP]        41  ./src/sensor/compass.ts
+[APP]        43  ./src/sensor/lightSensor.ts
+[APP]       186  ./src/sensor/plateau.ts
+[APP]       101  ./src/sensor/useCompassCapture.ts
+[APP]        98  ./src/sensor/useLightCapture.ts
+[APP]       309  ./src/sun/__tests__/solar.test.ts
+[APP]       423  ./src/sun/solar.ts
+[APP]       175  ./src/theme/theme.ts
+[APP]        39  ./src/ui/Backdrop.tsx
+[APP]        78  ./src/ui/CardHeader.tsx
+[APP]       177  ./src/ui/ConfirmModal.tsx
+[APP]        48  ./src/ui/FadeSlideIn.tsx
+[APP]        85  ./src/ui/GradientButton.tsx
+[APP]        66  ./src/ui/HeroPlant.tsx
+[APP]       259  ./src/ui/Icon.tsx
+[APP]        51  ./src/ui/LumenMark.tsx
+[APP]       150  ./src/ui/ResultsLoadingScreen.tsx
+[APP]       165  ./src/ui/StepProgress.tsx
+[APP]       167  ./src/ui/Toast.tsx
+[EVAL]      325  ./tools/analyze_spot_observations.py
+[EVAL]      163  ./tools/enrich_spot_master.py
+[EVAL]      197  ./tools/eval/engine_correctness.test.ts
+[EVAL]       55  ./tools/eval/export_plants_json.py
+[EVAL]      504  ./tools/eval/ivdv_evaluation.test.ts
+[EVAL]      313  ./tools/export_to_sqlite.py
+[EVAL]      295  ./tools/extract_phone_readings.py
+[EVAL]      171  ./tools/generate_icons.py
+[EVAL]       61  ./tools/remove_imputed_meter_formulas.py
+[EVAL]      109  ./tools/remove_imputed_meter_readings.py
+[EVAL]      712  ./tools/report/diagrams.py
+
+NOTE: tools/export_to_sqlite.py is [APP-data tooling] (produces the shipped DB).
+      tools/analyze_spot_observations.py + tools/analysis_output/* are [EVAL] (derives calibration constants = Chapter 5).

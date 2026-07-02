@@ -1,0 +1,39 @@
+================================================================================
+DOUBT D3 — Does skipping window size (with logged reason) set windowDone=TRUE,
+or does it use a separate windowSkipped flag that blocks the light step?
+================================================================================
+ANSWER: Skipping sets windowDone = TRUE via the SAME function's OR-logic. There
+is NO separate windowSkipped boolean flag — skipReason itself is the only signal,
+folded into the one windowStepComplete() predicate.
+
+EXACT LOGIC — src/components/WindowMeasureCard.tsx:44-49:
+  export function windowStepComplete(dims: WindowDims): boolean {
+    return (
+      (dims.width != null && dims.height != null && dims.sill != null) ||
+      (dims.skipReason != null && dims.skipReason !== '')
+    );
+  }
+
+EXACT CALL SITE — App.tsx:459:
+  const windowDone = windowStepComplete(windowDims);
+
+EXACT maxReachable GATING — App.tsx:549-554:
+  const maxReachable = useMemo(() => {
+    if (!distanceDone) return 0;
+    if (!windowDone) return 1;
+    if (!lightDone) return 2;
+    return 4; // Facing (3) optional and Results (4) both open
+  }, [distanceDone, windowDone, lightDone]);
+
+HOW A SKIP IS RECORDED:
+  App.tsx:760  setWindowDims((dims) => ({ ...dims, skipReason: reason }));
+  (skipReason is a free-text/coded reason, logged for the evaluation row —
+   App.tsx:607 windowSkipReason: windowDims.skipReason — but it is NOT an engine
+   input; window dims are never read by recommend()/scoring.ts.)
+
+VERDICT: CONFIRMED — windowDone becomes TRUE the instant a non-empty skipReason
+is set, exactly as true as when all three real dimensions are present. This is a
+single OR predicate, not two separate flags. So skipping window size with a
+logged reason DOES unlock the light step (maxReachable advances past 1) — it does
+NOT silently block it. The brief's X1 finding stands: window size is genuinely,
+mechanically skippable.

@@ -1,0 +1,140 @@
+================================================================================
+TASK X — ANTI-FABRICATION CONFIRMATIONS (8 traps). All [APP].
+Each answered directly with the proving code line. No softening.
+================================================================================
+
+--------------------------------------------------------------------------------
+X1. DISTANCE MANDATORY (AR, with manual tape as the alternative); rescale reachability.
+--------------------------------------------------------------------------------
+ANSWER: CONFIRMED — distance is mandatory and gates the entire flow; AR OR manual
+tape satisfies it. BUT one correction to the brief's wording (see MISMATCH below).
+
+Proof — App.tsx:461
+  const distanceDone = distanceResult != null || manualDistanceCm != null;
+Proof — App.tsx:549-554 (distance is the first hard gate; nothing opens without it)
+  const maxReachable = useMemo(() => {
+    if (!distanceDone) return 0;
+    if (!windowDone) return 1;
+    if (!lightDone) return 2;
+    return 4; // Facing (3) optional and Results (4) both open
+  }, [distanceDone, windowDone, lightDone]);
+Proof — App.tsx:344-352 (AR horizontal distance, else manual tape cm -> m)
+  const effectiveDistanceM = ... distanceResult ... : manualDistanceCm/100
+Proof — App.tsx:560 (Facing optional)  if (step === FACING) return true; // direction is optional
+
+Missing-distance weight RESCALE reachability:
+  Because distance is mandatory (maxReachable returns 0 until distanceDone), a USER
+  can never reach Results without a distance. The distance factor's available=false
+  branch (scoring.ts:92-94) and the renormalisation (scoring.ts:126-134) are
+  therefore EXERCISED BY UNIT TESTS ONLY, not reachable in the live user flow.
+  => "missing-distance rescale = unit-test-only" is the accurate statement.
+
+MISMATCH vs brief wording ("only the sun or facing step skippable"):
+  WINDOW SIZE (Step 2) is ALSO skippable, via a logged skip reason.
+    App.tsx:459  const windowDone = windowStepComplete(windowDims);
+    App.tsx:464  // distance + window size (or logged skip) + lux
+    App.tsx:760  setWindowDims((dims) => ({ ...dims, skipReason: reason }));
+    WindowMeasureCard.tsx:5  // If the window can't be measured at all, the step is skipped with [a reason]
+  Skipping window size does NOT change recommendations (window dims are never an
+  engine input; they only refine the per-spot aperture sun model). So the honest
+  statement is: MANDATORY = distance + lux; SKIPPABLE = window size (logged) and
+  facing (optional). Not "only sun/facing."
+
+--------------------------------------------------------------------------------
+X2. WINDOW ORIENTATION IS NEITHER A GATE NOR A SCORING WEIGHT.
+--------------------------------------------------------------------------------
+ANSWER: CONFIRMED.
+NOT a gate — gates.ts has only two gates (lux floor, direct-sun); comment gates.ts:1-4
+  "Orientation is deliberately NOT a gate (it is a scoring factor)".
+  [The comment says "scoring factor" loosely — see next line for what actually scores.]
+NOT a scoring weight — scoring.ts scores exactly four factors (scoring.ts:118-124):
+  light, directSun, distance, confidence. windowAspect is NOT one of them.
+Where orientation IS used: only to (a) derive the SPA direct-sun estimate
+  (App.tsx:475 windowAspect -> directSunHours), and (b) produce a display-only
+  label/warning (explain.ts orientationMatch, recommend.ts:78-80). It never gates
+  and never carries a weight.
+
+--------------------------------------------------------------------------------
+X3. AR HIT QUALITY HAS FOUR ENUM VALUES (+ UNKNOWN string fallback), not 3 tiers.
+--------------------------------------------------------------------------------
+ANSWER: CONFIRMED.
+Proof — ARMeasurementActivity.kt:140-145
+  private enum class HitQuality {
+      PLANE,
+      DEPTH,
+      FEATURE_POINT,
+      INSTANT_PLACEMENT
+  }
+UNKNOWN fallback (string, when quality is null) — ARMeasurementActivity.kt:1638-1639
+  putExtra("first_point_quality", firstHitQuality?.name ?: "UNKNOWN")
+  putExtra("second_point_quality", secondHitQuality?.name ?: "UNKNOWN")
+=> Four enum constants + an "UNKNOWN" fallback. NOT a three-tier scale.
+
+--------------------------------------------------------------------------------
+X4. LUX ONLY; NO PPFD/DLI MEASURED AT RUNTIME; NO TRAINED ML MODEL.
+--------------------------------------------------------------------------------
+ANSWER: CONFIRMED, with one nuance the chapter must state correctly.
+No ML model: grep for tensorflow/tflite/onnx/pytorch/sklearn/model.predict/inference
+  across src + android/app/src/main = NO HITS. No model file (.tflite/.onnx/.h5/.pt/
+  .mlmodel) anywhere in the repo. (The only .pb files are Gradle build-dependency
+  metadata under android/app/build/, NOT ML models.)
+Runtime unit is lux: the engine input is spot.lux (App.tsx:471 "RAW — the engine
+  calibrates"); calibration is linear lux->lux (calibration.ts).
+NUANCE (flag for the chapter — do NOT say "the app has no PPFD/DLI"):
+  PPFD/DLI/photoperiod ARE present as DISPLAY-ONLY REFERENCE values, read from the
+  dataset and shown in a separate, clearly-labelled panel. They are NEVER measured
+  and NEVER scored.
+    mapPlant.ts:71  // Build the display-only reference object ...
+    recommend.ts:59,83  reference: p.reference ?? null, // display-only pass-through, never scored
+    RecommendationList.tsx:183-184  "Strictly display-only — the disclaimer [says it is
+      not measured and not used to rank]"
+  Correct sentence: "No PPFD or DLI is measured at runtime or used in scoring; the
+  app only displays the dataset's reference PPFD/DLI/photoperiod values for context."
+
+--------------------------------------------------------------------------------
+X5. AR DISTANCE = RELIABLE OUTPUT; AR WINDOW SIZE = APPROXIMATE/PROTOTYPE.
+--------------------------------------------------------------------------------
+ANSWER: CONFIRMED (explicit in-code wording).
+WindowMeasureCard.tsx:2-3  "each AR-measured (approximate — ARCore on vertical/
+  reflective surfaces is the least reliable mode) or typed from a [tape reading]"
+WindowMeasureCard.tsx:201  "AR is approximate on glass and frames — a typed value [is better]"
+WindowMeasureCard.tsx:271  "AR is unreliable for short distances — tap a common height"
+Distance is treated as the primary/reliable output (Step 1, mandatory, drives the
+  distance zone and the aperture model). Window dims are flagged approximate and are
+  never an engine input.
+
+--------------------------------------------------------------------------------
+X6. THE LIGHT-FLOOR GATE COMPARES CALIBRATED LUX, NOT RAW.
+--------------------------------------------------------------------------------
+ANSWER: CONFIRMED.
+recommend.ts:98-100 substitutes calibrated lux BEFORE gating:
+  const luxRaw = spot.lux;
+  const effSpot: SpotInput = { ...spot, lux: applyLuxCalibration(luxRaw) };
+  const all = plants.map((p) => toRecommendation(p, effSpot, luxRaw));
+gates.ts:28 then compares that calibrated value:
+  if (p.maintenance_lux_min != null && spot.lux < p.maintenance_lux_min) ...
+  (here spot === effSpot, so spot.lux is the calibrated value)
+Raw is preserved only for display (luxRaw / luxUsed). => gate uses CALIBRATED lux.
+
+--------------------------------------------------------------------------------
+X7. LATERAL PLANT POSITION IS A GEOMETRIC REFINEMENT ONLY (trig + unit tests,
+    not field-validated).
+--------------------------------------------------------------------------------
+ANSWER: CONFIRMED.
+solar.ts (header for estimateDirectSunThroughAperture) documents the lateral offset
+  as a signed geometric shift of the azimuth opening; the vertical test deliberately
+  stays on the perpendicular distance "to avoid false precision".
+SpotDistanceCard.tsx:35  "Optional; refines the direct-sun estimate only."
+It changes only the sun-geometry (azimuth cone), justified by trigonometry and the
+  solar.test.ts unit tests (e.g. "lateralOffsetM = 0 reproduces the centre-line
+  baseline exactly"). It is NOT validated against field lux measurements.
+
+--------------------------------------------------------------------------------
+X8. FOUR-FACTOR BREAKDOWN VIEW EXISTS IN THE RUNNING UI.
+--------------------------------------------------------------------------------
+ANSWER: CONFIRMED (present now; no claim made about when it was added).
+RecommendationList.tsx:50-104  the breakdown component (one bar per weighted factor)
+  + the "See score breakdown ▾ / Hide score breakdown ▴" toggle.
+It reads the engine's r.factors (light / directSun / distance / confidence), so it
+  is screenshot-ready. A second, independent "Light science (reference)" panel also
+  exists (the display-only PPFD/DLI panel from X4).

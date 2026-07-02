@@ -1,0 +1,44 @@
+================================================================================
+V4 — CALIBRATION REGRESSION (Pearson 0.996, R2 0.993, slope 1.1054, intercept 134.4)
+================================================================================
+RESULT: MATCH on all four.
+
+Producing script: tools/analyze_spot_observations.py
+Output file: tools/analysis_output/agreement_summary.csv
+
+--------------------------------------------------------------------------------
+agreement_summary.csv overall row (RAW):
+--------------------------------------------------------------------------------
+split,group,n,mae_lux,mape_pct,median_pct_bias,pearson_r,fit_slope,fit_intercept,fit_r2,...
+overall,all,210,379.9,16.35,-14.96,0.9964,1.1054,134.4,0.9928,...
+
+  n               = 210   (MATCH: 210 paired readings)
+  pearson_r       = 0.9964  -> rounds to 0.996   (MATCH)
+  fit_slope       = 1.1054                        (MATCH)
+  fit_intercept   = 134.4                         (MATCH)
+  fit_r2          = 0.9928 -> rounds to 0.993     (MATCH)
+
+--------------------------------------------------------------------------------
+TOOL IDENTIFIED — analyze_spot_observations.py import lines (RAW):
+--------------------------------------------------------------------------------
+import csv
+import datetime
+import math
+import statistics
+import sys
+from collections import defaultdict
+from pathlib import Path
+import openpyxl
+
+>>> NOTE FOR THE THESIS: this is PURE-PYTHON. There is NO numpy, NO scipy, NO
+    sklearn, NO pandas. The Pearson correlation (def pearson at line 52) and the
+    ordinary-least-squares fit are HAND-IMPLEMENTED in standard-library Python;
+    openpyxl is used only to read the Excel workbook. Do NOT attribute the stats to
+    scipy/sklearn in the chapter.
+
+The raw 210 pairs are read by the script from the Excel SPOT_OBSERVATIONS workbook
+(phone reading vs UT383 meter). The output is regenerated only by this script, which
+is also the single source of truth for src/engine/config.ts LUX_CALIBRATION.
+
+config.ts confirms the shipped constants (lines 61-69):
+  slope: 1.1054,  intercept: 134.4,  validMinLux: 200,  validMaxLux: 6000

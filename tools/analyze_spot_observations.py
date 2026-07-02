@@ -95,6 +95,61 @@ def agreement_stats(rows):
     }
 
 
+def kfold_session_cv(rows, k=5, min_phone=0):
+    """Session-level k-fold cross-validation of the phone->meter calibration.
+
+    Holds out WHOLE sessions (consecutive triplets) so a session's 50/100/150 cm
+    rows never split across train/test (no leakage). For each fold: refit OLS on
+    the training sessions, predict the held-out rows, and collect the held-out
+    errors. This validates the calibration generalises beyond its fitting set;
+    the SHIPPED constants stay fit on ALL rows (computed separately in main()).
+
+    `min_phone` restricts fit + scoring to rows with phone >= that value, so the
+    validation can be reported over the range where calibration is actually
+    applied (the app returns raw lux below LUX_CALIBRATION.validMinLux). Session
+    grouping is preserved regardless (no leakage). Returns (per_fold, overall).
+    """
+    sessions = [rows[i:i + 3] for i in range(0, len(rows), 3)]
+    k = min(k, len(sessions))
+    if k < 2:
+        return [], {"folds": 0, "n_test_total": 0,
+                    "cv_mae": None, "cv_rmse": None, "cv_mape": None}
+    folds = [[] for _ in range(k)]
+    for idx, sess in enumerate(sessions):
+        folds[idx % k].append(sess)            # deterministic round-robin
+
+    per_fold = []
+    abs_all, sq_all, pct_all = [], [], []
+    for fi in range(k):
+        test_rows = [r for s in folds[fi] for r in s if r["p_avg"] >= min_phone]
+        train_rows = [r for j in range(k) if j != fi
+                      for s in folds[j] for r in s if r["p_avg"] >= min_phone]
+        if len(train_rows) < 2 or not test_rows:
+            continue
+        slope, intercept, _ = ols([r["p_avg"] for r in train_rows],
+                                  [r["m_avg"] for r in train_rows])
+        a, q, p = [], [], []
+        for r in test_rows:
+            err = (slope * r["p_avg"] + intercept) - r["m_avg"]
+            a.append(abs(err)); q.append(err * err)
+            p.append(abs(err) / r["m_avg"] * 100)
+        abs_all += a; sq_all += q; pct_all += p
+        per_fold.append({
+            "fold": fi + 1, "n_train": len(train_rows), "n_test": len(test_rows),
+            "slope": round(slope, 4), "intercept": round(intercept, 1),
+            "mae": round(statistics.mean(a), 1),
+            "rmse": round(math.sqrt(statistics.mean(q)), 1),
+            "mape": round(statistics.mean(p), 2),
+        })
+    overall = {
+        "folds": len(per_fold), "n_test_total": len(abs_all),
+        "cv_mae": round(statistics.mean(abs_all), 1) if abs_all else None,
+        "cv_rmse": round(math.sqrt(statistics.mean(sq_all)), 1) if sq_all else None,
+        "cv_mape": round(statistics.mean(pct_all), 2) if pct_all else None,
+    }
+    return per_fold, overall
+
+
 def main() -> int:
     if not MASTER.exists():
         print(f"ERROR: master workbook not found: {MASTER}")
@@ -212,6 +267,9 @@ def main() -> int:
     all_fit = agreement_stats(rows)
     sens_rows = [x for x in rows if x["p_n"] >= 5 and x["m_n"] >= 5]
     sens_fit = agreement_stats(sens_rows)
+    VALID_MIN_LUX = 200  # mirrors src/engine/config.ts LUX_CALIBRATION.validMinLux
+    per_fold, cv = kfold_session_cv(rows, k=5, min_phone=VALID_MIN_LUX)
+    _, cv_all = kfold_session_cv(rows, k=5, min_phone=0)
     cal_path = OUT_DIR / "calibration_constants.txt"
     today = datetime.date.today().isoformat()
     cal_path.write_text(
@@ -223,6 +281,16 @@ def main() -> int:
         f"SENSITIVITY — 5-reading rows only (n={sens_fit['n']}):\n"
         f"  slope={sens_fit['fit_slope']}  intercept={sens_fit['fit_intercept']}"
         f"  R2={sens_fit['fit_r2']}  r={sens_fit['pearson_r']}\n\n"
+        f"SESSION {cv['folds']}-FOLD CROSS-VALIDATION (held-out, refit per fold):\n"
+        f"  In validated range (phone>={VALID_MIN_LUX} lx, n_test={cv['n_test_total']}):\n"
+        f"    MAE={cv['cv_mae']} lux  RMSE={cv['cv_rmse']} lux  MAPE={cv['cv_mape']}%\n"
+        f"  All rows incl. sub-{VALID_MIN_LUX} lx (n_test={cv_all['n_test_total']}):\n"
+        f"    MAE={cv_all['cv_mae']} lux  RMSE={cv_all['cv_rmse']} lux  MAPE={cv_all['cv_mape']}%\n"
+        f"  (MAPE is inflated below the valid range, where a small lux error is a\n"
+        f"  large %, which is exactly why the app returns raw lux there.)\n"
+        f"  Validates the calibration generalises beyond its fitting set. The\n"
+        f"  SHIPPED constants stay the ALL-rows fit above; this is a separate,\n"
+        f"  reported validation number (see calibration_crossval.csv per fold).\n\n"
         f"Use the ALL-rows constants in src/engine/config.ts LUX_CALIBRATION.\n"
         f"Device-specific (Samsung S21+), valid ~200-6000 lx indoor daylight.\n",
         encoding="utf-8",
@@ -232,6 +300,24 @@ def main() -> int:
           f"{all_fit['fit_intercept']}  (R2={all_fit['fit_r2']}, n={all_fit['n']})")
     print(f"  5-rdg: meter = {sens_fit['fit_slope']} * phone + "
           f"{sens_fit['fit_intercept']}  (R2={sens_fit['fit_r2']}, n={sens_fit['n']})")
+
+    # --- calibration_crossval.csv (session k-fold held-out validation) ------
+    cv_path = OUT_DIR / "calibration_crossval.csv"
+    with cv_path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["fold", "n_train", "n_test", "fold_slope", "fold_intercept",
+                    "mae_lux", "rmse_lux", "mape_pct"])
+        for r in per_fold:
+            w.writerow([r["fold"], r["n_train"], r["n_test"], r["slope"],
+                        r["intercept"], r["mae"], r["rmse"], r["mape"]])
+        w.writerow([])
+        w.writerow([f"HELD-OUT (phone>={VALID_MIN_LUX} lx)", "", cv["n_test_total"],
+                    "", "", cv["cv_mae"], cv["cv_rmse"], cv["cv_mape"]])
+        w.writerow(["HELD-OUT (all rows)", "", cv_all["n_test_total"], "", "",
+                    cv_all["cv_mae"], cv_all["cv_rmse"], cv_all["cv_mape"]])
+    print(f"Wrote {cv_path.name} (session {cv['folds']}-fold CV, in-range >="
+          f"{VALID_MIN_LUX} lx: held-out MAE={cv['cv_mae']} lux, "
+          f"MAPE={cv['cv_mape']}%, RMSE={cv['cv_rmse']} lux, n_test={cv['n_test_total']})")
     return 0
 
 

@@ -11,6 +11,27 @@ export type WindowAspect =
   | 'south_facing'
   | 'west_facing';
 
+/**
+ * Display-only scientific enrichment for one plant (DLI / photoperiod / PPFD).
+ * These are NEVER measured at runtime and NEVER enter scoring — the engine
+ * compares measured spot lux only (CLAUDE.md §1, §12). They are surfaced as a
+ * labelled "reference" panel so the recommendation can show species-specific
+ * plant-science context. All fields null when the plant has no such evidence.
+ */
+export interface PlantReference {
+  /** Daily Light Integral range (mol·m⁻²·day⁻¹). */
+  dliMin: number | null;
+  dliMax: number | null;
+  /** Suitable daily light-hours range (photoperiod, hours). */
+  photoperiodMin: number | null;
+  photoperiodMax: number | null;
+  /** Photosynthetic Photon Flux Density range (µmol·m⁻²·s⁻¹). */
+  maintenancePpfdMin: number | null;
+  maintenancePpfdMax: number | null;
+  preferredPpfdMin: number | null;
+  preferredPpfdMax: number | null;
+}
+
 /** One plant's runtime-relevant reference data (from the bundled SQLite `plant`). */
 export interface Plant {
   plant_id: string;
@@ -28,6 +49,8 @@ export interface Plant {
   direct_sun_tolerance: DirectSunTolerance;
   final_confidence: Confidence;
   value_status?: string | null;
+  /** Display-only scientific enrichment — never scored. Null when unavailable. */
+  reference?: PlantReference | null;
 }
 
 /** The captured spot context. `lux` is required; the rest fill in as the
@@ -88,4 +111,7 @@ export interface Recommendation {
   displayWarning: string | null;
   recommendationConfidence: Confidence | 'reduced';
   explanation: string;
+  /** Display-only plant-science enrichment (DLI/photoperiod/PPFD), passed
+   *  straight through from the plant — never affects score, band, or gates. */
+  reference?: PlantReference | null;
 }

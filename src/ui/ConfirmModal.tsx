@@ -24,6 +24,9 @@ type Props = {
   confirmLabel?: string;
   cancelLabel?: string;
   destructive?: boolean;
+  /** Single-button informational mode (e.g. a forced acknowledgement) — hides
+   *  the Cancel button and the scrim/back-press dismiss, leaving only Confirm. */
+  hideCancel?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 };
@@ -36,6 +39,7 @@ export default function ConfirmModal({
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
   destructive = false,
+  hideCancel = false,
   onConfirm,
   onCancel,
 }: Props) {
@@ -59,9 +63,9 @@ export default function ConfirmModal({
       visible={visible}
       transparent
       animationType="fade"
-      onRequestClose={onCancel}
+      onRequestClose={hideCancel ? onConfirm : onCancel}
       statusBarTranslucent>
-      <Pressable style={styles.scrim} onPress={onCancel}>
+      <Pressable style={styles.scrim} onPress={hideCancel ? undefined : onCancel}>
         <Animated.View
           style={[
             styles.card,
@@ -81,12 +85,14 @@ export default function ConfirmModal({
             <Text style={styles.message}>{message}</Text>
 
             <View style={styles.row}>
-              <TouchableOpacity
-                style={styles.cancelBtn}
-                activeOpacity={0.8}
-                onPress={onCancel}>
-                <Text style={styles.cancelText}>{cancelLabel}</Text>
-              </TouchableOpacity>
+              {!hideCancel && (
+                <TouchableOpacity
+                  style={styles.cancelBtn}
+                  activeOpacity={0.8}
+                  onPress={onCancel}>
+                  <Text style={styles.cancelText}>{cancelLabel}</Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity
                 style={[styles.confirmBtn, { backgroundColor: accent }]}
                 activeOpacity={0.85}

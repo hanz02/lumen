@@ -1,0 +1,55 @@
+================================================================================
+DOUBT D4 — When facing/sun is skipped, does the sun score drop to zero, or is
+it excluded with proportional reweighting?
+================================================================================
+ANSWER: YES — excluded from the weighted sum, remaining weights rescaled
+proportionally. It does NOT drop to zero / does NOT penalise the score.
+
+EXACT EVIDENCE — src/engine/scoring.ts, directSunFactor() (lines 47-51):
+  function directSunFactor(spot: SpotInput, p: Plant): FactorScore {
+    const known = spot.directSunPresent != null || spot.directSunHours != null;
+    if (!known) {
+      return { value: 0, available: false, note: 'No sun-path estimate captured.' };
+    }
+    ...
+
+EXACT EVIDENCE — src/engine/scoring.ts, scorePlant() (lines 126-134):
+  const terms = [
+    { f: factors.light, w: WEIGHTS.light },
+    { f: factors.directSun, w: WEIGHTS.directSun },
+    { f: factors.distance, w: WEIGHTS.distance },
+    { f: factors.confidence, w: WEIGHTS.confidence },
+  ].filter((t) => t.f.available);          // <-- unavailable factors DROPPED here
+
+  const wSum = terms.reduce((s, t) => s + t.w, 0);
+  const raw = wSum > 0 ? terms.reduce((s, t) => s + t.w * t.f.value, 0) / wSum : 0;
+                                            // <-- divided by wSum: PROPORTIONAL rescale
+
+CONFIRMED MECHANISM: when directSun.available === false, it is filtered OUT of
+`terms` entirely (its value=0 is never multiplied into the numerator), AND its
+weight (0.25) is excluded from `wSum` (the denominator). So the remaining three
+factors (light 0.30, distance 0.25, confidence 0.20 -> renormalised to sum to 1.0
+among themselves, i.e. effectively ~0.40/0.33/0.27) carry 100% of the score —
+this is true proportional reweighting, not a zero-value penalty baked into the
+average.
+
+WHAT THE USER SEES: src/engine/recommend.ts:81 sets
+  recommendationConfidence: recommendationConfidence(p, scored.factors),
+EXACT definition — src/engine/explain.ts:67-75:
+  export function recommendationConfidence(
+    p: Plant,
+    factors: RecommendationFactors,
+  ): Confidence | 'reduced' {
+    if (!factors.directSun.available || !factors.distance.available) {
+      return 'reduced';
+    }
+    return p.final_confidence;
+  }
+This returns 'reduced' specifically when directSun OR distance is unavailable —
+surfaced in the UI as a lower-confidence label, NOT as a lower score. The numeric
+score itself is the honest weighted average of only the AVAILABLE factors.
+
+VERDICT: CONFIRMED — available=false -> excluded from wSum -> remaining weights
+rescaled proportionally -> score stays an honest partial-capture average; the
+user-visible signal of the gap is the "reduced" confidence label, not a score
+penalty.

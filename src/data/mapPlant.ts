@@ -5,7 +5,12 @@
  *  weakest value ('unknown' tolerance / 'provisional' confidence) instead of
  *  silently passing an invalid string into the engine. */
 
-import type { Confidence, DirectSunTolerance, Plant } from '../engine/types';
+import type {
+  Confidence,
+  DirectSunTolerance,
+  Plant,
+  PlantReference,
+} from '../engine/types';
 
 /** Shape of one row as bridged from PlantDataModule.getPlants(). */
 export interface PlantDbRow {
@@ -22,6 +27,15 @@ export interface PlantDbRow {
   maintenance_lux_max?: number | null;
   preferred_lux_min?: number | null;
   preferred_lux_max?: number | null;
+  // Display-only scientific enrichment (never scored).
+  dli_min?: number | null;
+  dli_max?: number | null;
+  photoperiod_min?: number | null;
+  photoperiod_max?: number | null;
+  maintenance_ppfd_min?: number | null;
+  maintenance_ppfd_max?: number | null;
+  preferred_ppfd_min?: number | null;
+  preferred_ppfd_max?: number | null;
 }
 
 const SUN_TOLERANCES: ReadonlySet<string> = new Set([
@@ -52,6 +66,23 @@ function lux(v: number | null | undefined): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
+/** Build the display-only reference object, or null when the plant has no
+ *  DLI/photoperiod/PPFD evidence at all (so the UI can skip the panel cleanly). */
+function reference(row: PlantDbRow): PlantReference | null {
+  const ref: PlantReference = {
+    dliMin: lux(row.dli_min),
+    dliMax: lux(row.dli_max),
+    photoperiodMin: lux(row.photoperiod_min),
+    photoperiodMax: lux(row.photoperiod_max),
+    maintenancePpfdMin: lux(row.maintenance_ppfd_min),
+    maintenancePpfdMax: lux(row.maintenance_ppfd_max),
+    preferredPpfdMin: lux(row.preferred_ppfd_min),
+    preferredPpfdMax: lux(row.preferred_ppfd_max),
+  };
+  const hasAny = Object.values(ref).some((v) => v != null);
+  return hasAny ? ref : null;
+}
+
 export function mapRowToPlant(row: PlantDbRow): Plant {
   return {
     plant_id: row.plant_id,
@@ -67,5 +98,6 @@ export function mapRowToPlant(row: PlantDbRow): Plant {
     direct_sun_tolerance: sunTolerance(row.direct_sun_tolerance),
     final_confidence: confidence(row.final_confidence),
     value_status: row.value_status ?? null,
+    reference: reference(row),
   };
 }

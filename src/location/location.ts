@@ -15,6 +15,17 @@ export interface GeoFix {
   source: string;
 }
 
+/** Error thrown when the user selected "never ask again" for location.
+ *  Callers should open Settings rather than re-prompting. */
+export class LocationPermissionPermanentlyDeniedError extends Error {
+  readonly permanentlyDenied = true;
+  constructor() {
+    super(
+      'Location permission permanently denied — enable it in App Settings to get the sun estimate.',
+    );
+  }
+}
+
 export async function getPositionWithPermission(): Promise<GeoFix> {
   if (Platform.OS === 'android') {
     const statuses = await PermissionsAndroid.requestMultiple([
@@ -25,6 +36,10 @@ export async function getPositionWithPermission(): Promise<GeoFix> {
       (s) => s === PermissionsAndroid.RESULTS.GRANTED,
     );
     if (!granted) {
+      const neverAsk = Object.values(statuses).some(
+        (s) => s === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN,
+      );
+      if (neverAsk) throw new LocationPermissionPermanentlyDeniedError();
       throw new Error(
         'Location permission denied — the direct-sun estimate needs a city-level position.',
       );

@@ -1,0 +1,76 @@
+================================================================================
+V7 — ORACLE INDEPENDENCE   (make-or-break check for Section 3.8.3)
+================================================================================
+VERDICT: INDEPENDENT (with one honest caveat stated below).
+
+The oracle re-derives the gate verdict and the light band INLINE from each plant's
+raw thresholds + documented rule constants. It does NOT call the engine's gates.ts
+or scoring.ts to compute the expected outcome. The check is therefore NOT circular.
+
+--------------------------------------------------------------------------------
+1. FULL import block of tools/eval/engine_correctness.test.ts (RAW, lines 21-34):
+--------------------------------------------------------------------------------
+import * as fs from 'fs';
+import * as path from 'path';
+import { recommend } from '../../src/engine/recommend';
+import { applyLuxCalibration } from '../../src/engine/calibration';
+import { DIRECT_SUN_HOURS_THRESHOLD } from '../../src/engine/config';
+import type { Plant, SpotInput, LightBand } from '../../src/engine/types';
+import { mapRowToPlant, type PlantDbRow } from '../../src/data/mapPlant';
+
+--------------------------------------------------------------------------------
+2. THE ORACLE FUNCTIONS (RAW, lines 43-68) — the EXPECTED outcome:
+--------------------------------------------------------------------------------
+function spotHasDirectSun(spot: SpotInput): boolean {
+  if (spot.directSunPresent === true) return true;
+  return (
+    spot.directSunHours != null &&
+    spot.directSunHours >= DIRECT_SUN_HOURS_THRESHOLD
+  );
+}
+/** Expected gate outcome derived straight from the plant's cited thresholds. */
+function expectedEliminated(p: Plant, calLux: number, spot: SpotInput): boolean {
+  if (p.maintenance_lux_min != null && calLux < p.maintenance_lux_min) return true;
+  if (p.direct_sun_tolerance === 'none' && spotHasDirectSun(spot)) return true;
+  return false;
+}
+/** Expected light band derived straight from the plant's cited thresholds. */
+function expectedBand(p: Plant, calLux: number): LightBand {
+  const floor = p.maintenance_lux_min;
+  if (floor != null && calLux < floor) return 'below_survival';
+  const ceil = p.preferred_lux_max;
+  if (ceil != null && calLux > ceil) return 'excess';
+  const good =
+    p.preferred_lux_min ?? p.maintenance_lux_max ?? p.preferred_lux_max ?? null;
+  if (good != null && calLux >= good) return 'preferred';
+  return 'survival';
+}
+
+--------------------------------------------------------------------------------
+3. WHICH ENGINE SYMBOLS THE ORACLE TOUCHES:
+--------------------------------------------------------------------------------
+- gates.ts / scoring.ts / lightFit.ts:  NOT referenced by the oracle at all.
+  The gate and band decisions are re-typed from raw thresholds (maintenance_lux_min,
+  preferred_lux_min/max, maintenance_lux_max, direct_sun_tolerance).
+- recommend():  imported, but it is the SYSTEM UNDER TEST. It is called separately
+  (line 101) and its output is COMPARED to the oracle — it does not feed the oracle.
+- applyLuxCalibration (from engine/calibration):  USED by the oracle to compute
+  calLux (line 101), the SAME calibrated lux the engine gates on.
+- DIRECT_SUN_HOURS_THRESHOLD (from engine/config):  USED by spotHasDirectSun.
+
+CAVEAT (state it honestly, it does not break the check): the oracle shares TWO
+engine artifacts with the system under test — the calibration TRANSFORM
+applyLuxCalibration and the documented CONSTANT DIRECT_SUN_HOURS_THRESHOLD (=1.0 h).
+Neither is a decision rule: the calibration is a fixed measurement conversion that
+must be identical on both sides for the comparison to be meaningful, and the 1.0 h
+threshold is a published methodology constant. The actual GATE and BAND decision
+logic is re-implemented independently. So the oracle is independent of the engine's
+decision code, while deliberately sharing the measurement transform and one cited
+constant. This is the correct, defensible framing for Section 3.8.3.
+
+--------------------------------------------------------------------------------
+VERDICT LINE:
+--------------------------------------------------------------------------------
+INDEPENDENT
+Evidence: lines 51-68 re-derive gate+band from raw thresholds; gates.ts/scoring.ts
+are never imported; recommend() is compared against, not used to build, the oracle.

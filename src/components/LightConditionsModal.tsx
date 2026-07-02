@@ -1,7 +1,8 @@
 /** Shown once before the first spot-light capture: a daytime check (via
- *  solarPosition, reusing the SPA's minElevationDeg threshold) plus a
- *  reminder checklist for a clean reading. Advisory only — "Yes, I
- *  understand" always proceeds, even at night / without a position fix. */
+ *  solarPosition, using NIGHT_THRESHOLD_ELEVATION_DEG — civil twilight, a
+ *  separate constant from the SPA's direct-sun-beam floor) plus a reminder
+ *  checklist for a clean reading. Advisory only — "Yes, I understand" always
+ *  proceeds, even at night / without a position fix. */
 
 import React, { useEffect, useRef } from 'react';
 import { Animated, Easing, Modal, StyleSheet, Text, View } from 'react-native';
@@ -60,7 +61,7 @@ function DaylightHeader({ status, elevationDeg }: { status: DaylightStatus; elev
     status === 'day'
       ? 'Good time to measure — readings reflect outdoor light.'
       : status === 'night'
-      ? 'A spot reading now won’t reflect daylight conditions.'
+      ? 'Any light right now is likely from ceiling lights, lamps, screens, or streetlight — not daylight.'
       : status === 'unknown'
       ? 'Make sure you’re measuring during daylight hours.'
       : 'This only takes a moment.';

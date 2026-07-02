@@ -1,0 +1,73 @@
+FILE: Functional_Test_Case_Log_v2 (version 1).xlsx  sheet Functional_Test_Cases
+Total TC rows: 38
+ID    | Module              | Verdict | Description
+------------------------------------------------------------------------------------------
+TC-01 | Lux Capture        | Pass   | Plateau detection succeeds under stable light
+TC-02 | Lux Capture        | Pass   | Plateau detection rejects unstable/moving capt
+TC-03 | Lux Calibration    | Pass   | Calibration applies within valid range (200-60
+TC-04 | Lux Calibration    | Pass   | Range guard returns raw value below 200 lx
+TC-05 | AR Distance        | Pass   | AR floor-to-floor plant-to-window distance
+TC-06 | AR Distance        | Pass   | Retry / re-measure flow works
+TC-07 | Compass/SPA        | Pass   | Window facing capture produces a valid aspect
+TC-08 | Compass/SPA        | Pass   | Skipping Step 4 still produces a result with r
+TC-09 | Engine - Gate 1    | Pass   | Plant eliminated when lux below survival floor
+TC-10 | Engine - Gate 2    | Pass   | No-tolerance plant eliminated when the SPA est
+TC-11 | Engine - Scoring   | Pass   | Score breakdown shows the four weighted factor
+TC-12 | Engine - Explanation| Pass   | Every recommended plant has a plain-language e
+TC-13 | Wizard Flow        | Pass   | Locked step wizard prevents skipping ahead
+TC-14 | Wizard Flow        | Pass   | Backward edits to window size / lateral positi
+TC-15 | Evaluation Log     | Pass   | Reference fields (4 tape + 5 UT383 + live medi
+TC-16 | AR Distance        | Pass   | Manual (tape) distance fallback when AR can't 
+TC-17 | Engine - Light fit | Pass   | Light-fit sub-score differs across zones (not 
+TC-18 | SPA - Lateral      | Pass   | Lateral plant position changes the sun estimat
+TC-19 | SPA - Diagram      | Pass   | Diagram still shown when 0 h of direct sun rea
+TC-20 | SPA - Night        | Pass   | Night capture shows the warning + night result
+TC-21 | Compass            | Pass   | Tilt warning (REPLACES magnetic-interference f
+TC-22 | System             | Pass   | Works fully offline (no network dependency)
+TC-23 | System             | Pass   | Graceful handling of missing light sensor / de
+TC-24 | Window Size        | Pass   | Manual (tape) entry for window dimensions
+TC-25 | Window Size        | Pass   | Floor-to-ceiling window (zero sill) toggle
+TC-26 | Window Size        | Pass   | Small / hard-to-measure sill quick-pick preset
+TC-27 | Window Size        | Pass   | Full window-measurement skip, with a logged re
+TC-28 | Wizard Flow        | Pass   | Leaving a step mid-capture stops the sensor (n
+TC-29 | Evaluation Log     | Pass   | Clearing the log requires the destructive conf
+TC-30 | Compass/SPA        | Pass   | Compass still gives an aspect via magnetic-onl
+TC-31 | Engine - Edge case | Pass   | Every plant gated out shows the empty-list mes
+TC-32 | AR Distance        | Pass   | AR session cancelled (Android back button) bef
+TC-33 | Wizard Flow        | Pass   | Two consecutive sessions ('New spot') leave no
+TC-34 | UI / Polish        | Pass   | Results loading animation plays on a genuine r
+TC-35 | Wizard Flow        | Pass   | Editing the plant-to-window distance after lig
+TC-36 | System             | Pass   | Retrying a failed GPS fix recovers the sun est
+TC-37 | AR Distance        | Fail   | AR-unsupported device shows a clear message in
+TC-38 | Wizard Flow        | Pass   | Leaving with unsaved progress asks for confirm
+------------------------------------------------------------------------------------------
+VERDICTS: {'Pass': 37, 'Fail': 1}
+MODULE COVERAGE: {'Lux Capture': 2, 'Lux Calibration': 2, 'AR Distance': 5, 'Compass/SPA': 3, 'Engine - Gate 1': 1, 'Engine - Gate 2': 1, 'Engine - Scoring': 1, 'Engine - Explanation': 1, 'Wizard Flow': 6, 'Evaluation Log': 2, 'Engine - Light fit': 1, 'SPA - Lateral': 1, 'SPA - Diagram': 1, 'SPA - Night': 1, 'Compass': 1, 'System': 3, 'Window Size': 4, 'Engine - Edge case': 1, 'UI / Polish': 1}
+
+==========================================================================================
+TC-37 FULL ROW (the single Fail):
+
+[Test ID]
+TC-37
+
+[Module]
+AR Distance
+
+[Description]
+AR-unsupported device shows a clear message instead of a black screen (field-confirmed, Redmi Note 10)
+
+[Steps]
+1. On a device ARCore genuinely cannot support (confirmed field case: Xiaomi Redmi Note 10), tap 'Measure with AR' on Step 1
+2. If prompted to install/update AR services, follow through to the Play Store, which reports the device unsupported, then return to the app
+
+[Test Data/Input]
+A device where Play Store itself reports the device unsupported for AR
+
+[Expected]
+BEFORE the fix: the AR activity showed a blank black screen with no message, no way out except the OS back button (real field finding). FIXED 2026-06-23: ARMeasurementActivity.kt now calls ArCoreApk.getInstance().checkAvailability() before attaching the AR fragment; on UNSUPPORTED_DEVICE_NOT_CAPABLE it shows an AlertDialog ('AR not supported on this device - use the tape-measurement fields instead') and returns to the app, which surfaces a distinct toast titled 'AR not supported' (ARModule.kt E_AR_UNSUPPORTED) instead of the generic 'Measurement cancelled'. The manual tape fallback (TC-16) then lets the user finish the spot. NOTE: proactively greying out the AR buttons app-wide before the user even taps them is a possible further enhancement, not implemented this round.
+
+[Actual]
+AR measurement buttons for plant distances and window sizes are dissabled and grey out
+
+[Pass/Fail]
+Fail

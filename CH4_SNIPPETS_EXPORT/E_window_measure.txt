@@ -1,0 +1,50 @@
+################################################################################
+# E. src/components/WindowMeasureCard.tsx  (556 lines) — predicate + skip/approx
+################################################################################
+
+=== E1. windowStepComplete() predicate  [44-49] ===
+  44  export function windowStepComplete(dims: WindowDims): boolean {
+  45    return (
+  46      (dims.width != null && dims.height != null && dims.sill != null) ||
+  47      (dims.skipReason != null && dims.skipReason !== '')
+  48    );
+  49  }
+
+=== E2a. Header note: AR window-size is APPROXIMATE  [1-6] ===
+   1  /** Required window-size step (evaluation protocol, not an engine input):
+   2   *  width, height, and sill height, each AR-measured (approximate — ARCore on
+   3   *  vertical/reflective surfaces is the least reliable mode) or typed from a
+   4   *  tape measure. Floor-to-ceiling windows have no sill — a toggle records
+   5   *  sill = 0. If the window can't be measured at all, the step is skipped with
+   6   *  a logged reason — that failure record is itself Ch 4 evidence. */
+
+=== E2b. In-card 'AR is approximate on glass and frames' note  [198-205] ===
+ 198        ) : (
+ 199          <Text style={styles.bodyText}>
+ 200            Tap <Text style={styles.bodyEm}>AR</Text> to measure each one, or type
+ 201            a tape reading. AR is approximate on glass and frames — a typed value
+ 202            is treated as tape-measured. Recorded for the evaluation dataset.
+ 203          </Text>
+ 204        )}
+ 205  
+
+=== E2c. Skip handler + skip-reason recording UI  [206-224] ===
+ 206        {skipped ? (
+ 207          <>
+ 208            <Text style={styles.skippedText}>
+ 209              Skipped — “{dims.skipReason}”. This is recorded in the evaluation
+ 210              log.
+ 211            </Text>
+ 212            <TouchableOpacity
+ 213              style={styles.secondaryButton}
+ 214              activeOpacity={0.82}
+ 215              onPress={() => {
+ 216                onSkip(null);
+ 217                setShowSkip(false);
+ 218                setSkipText('');
+ 219              }}>
+ 220              <Text style={styles.secondaryButtonText}>Undo skip</Text>
+ 221            </TouchableOpacity>
+ 222          </>
+ 223        ) : (
+ 224          <>

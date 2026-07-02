@@ -40,7 +40,7 @@ OUT_DB = os.path.join(OUT_DIR, "plant_db.sqlite")
 
 SCHEMA_VERSION = 1
 EXPECTED_PLANTS = 31
-EXPECTED_EVIDENCE = 168
+EXPECTED_EVIDENCE = 171
 
 # --------------------------------------------------------------------------- schema
 # PLANT_MASTER: header row 1, data row 2+  (27 columns, 1-indexed)

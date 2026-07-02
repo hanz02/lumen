@@ -1,0 +1,43 @@
+================================================================================
+DOUBT D1 — Does the distance-edit cascade actually clear the light reading?
+================================================================================
+ANSWER: YES. Real, working guard in App.tsx, not just design intent.
+
+THE GUARD FUNCTION (App.tsx:221-228):
+  const invalidateDownstreamOnDistanceEdit = () => {
+    if (lightState.phase !== 'done') return;
+    resetLightCapture();
+    setLightChecklistAcked(false);
+    resetCompass();
+    setCaptureSunElevationDeg(null);
+    setPendingFacingRecheck(true);
+  };
+
+CALL SITE 1 — AR distance measurement (App.tsx:668-678, measureDistance()):
+  const measurement = await startARMeasurement({...});
+  if (measurement.measurementTool !== 'PLANT_DISTANCE') return;
+  invalidateDownstreamOnDistanceEdit();    // <-- called BEFORE the new distance is set
+  setDistanceResult(measurement);
+  setManualDistanceCm(null); // AR wins; clear any prior manual value
+
+CALL SITE 2 — manual tape distance (App.tsx:699-703, setManualDistance()):
+  const setManualDistance = (cm: number) => {
+    invalidateDownstreamOnDistanceEdit();   // <-- same guard, manual path
+    setManualDistanceCm(cm);
+    setDistanceResult(null);
+  };
+
+BEHAVIOUR CONFIRMED:
+  - The guard only fires if a light reading is already 'done' (so re-measuring
+    distance before any light capture is a no-op for this cascade).
+  - It resets the light capture (resetLightCapture), un-acknowledges the light
+    checklist, resets the compass capture, clears the captured sun elevation, and
+    flags pendingFacingRecheck — which (per the App.tsx:198-205 comment) nudges a
+    facing re-check modal since Facing is optional and the sequential lock
+    (maxReachable) does not otherwise force it.
+  - Because lightDone becomes false again, maxReachable (App.tsx:549-554) drops
+    back to 2, re-locking Facing/Results until light is recaptured.
+
+VERDICT: CONFIRMED, MATCH with Chapter 3's stated design intent — this is a real,
+exercised guard in the live user flow (both AR and manual distance-edit paths),
+not merely documented intent.

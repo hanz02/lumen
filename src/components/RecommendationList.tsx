@@ -5,12 +5,230 @@
  *  assets) — deterministic tint per plant_id so the list reads visually. */
 
 import React, { useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import {
+  LayoutAnimation,
+  Platform,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  UIManager,
+  View,
+} from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import type { Recommendation, RecommendResult } from '../engine';
+import { WEIGHTS } from '../engine/config';
 import { cardBase, palette, radii } from '../theme/theme';
 import CardHeader from '../ui/CardHeader';
 import Icon from '../ui/Icon';
+
+if (
+  Platform.OS === 'android' &&
+  UIManager.setLayoutAnimationEnabledExperimental
+) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
+/** The four weighted factors, in display order, with their plain-language label
+ *  and the engine weight (so the percentages shown are the real ones). */
+const FACTOR_ROWS: Array<{
+  key: 'light' | 'directSun' | 'distance' | 'confidence';
+  label: string;
+}> = [
+  { key: 'light', label: 'Light fit' },
+  { key: 'directSun', label: 'Sun comfort' },
+  { key: 'distance', label: 'Distance fit' },
+  { key: 'confidence', label: 'Evidence quality' },
+];
+
+/** Green / amber / red by sub-score, mirroring the confidence colour scale. */
+function barColor(value: number): string {
+  if (value >= 0.8) return palette.leaf;
+  if (value >= 0.5) return palette.amber;
+  return palette.coral;
+}
+
+/** Expandable per-plant breakdown: one bar per weighted factor, each labelled
+ *  with its real weight and a plain-language note. Factors that were not captured
+ *  (e.g. no sun estimate) say so instead of showing a misleading 0 bar. */
+function FactorBreakdown({ r }: { r: Recommendation }) {
+  return (
+    <View style={styles.breakdown}>
+      {FACTOR_ROWS.map(({ key, label }) => {
+        const f = r.factors[key];
+        const weightPct = Math.round(WEIGHTS[key] * 100);
+        const scorePct = Math.round(f.value * 100);
+        return (
+          <View key={key} style={styles.factorRow}>
+            <View style={styles.factorHead}>
+              <Text style={styles.factorLabel}>{label}</Text>
+              <Text style={styles.factorWeight}>
+                {f.available ? `${scorePct} / 100` : '—'} · {weightPct}% of score
+              </Text>
+            </View>
+            {f.available ? (
+              <View style={styles.factorTrack}>
+                <View
+                  style={[
+                    styles.factorFill,
+                    { width: pct(scorePct), backgroundColor: barColor(f.value) },
+                  ]}
+                />
+              </View>
+            ) : null}
+            <Text style={styles.factorNote}>
+              {f.available
+                ? f.note
+                : 'Not captured — dropped from the score, and the other factors were reweighted to make up 100%.'}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+/** "See score breakdown ▾ / Hide score breakdown ▴" toggle. */
+function BreakdownToggle({
+  expanded,
+  onToggle,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      style={styles.breakdownToggle}
+      activeOpacity={0.8}
+      onPress={onToggle}>
+      <Text style={styles.breakdownToggleText}>
+        {expanded ? 'Hide score breakdown ▴' : 'See score breakdown ▾'}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+/** Formats a numeric range as "X–Y unit", a single bound, or null when absent. */
+function formatRange(
+  min: number | null,
+  max: number | null,
+  unit: string,
+): string | null {
+  const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+  if (min != null && max != null) {
+    return min === max
+      ? `${fmt(min)} ${unit}`
+      : `${fmt(min)}–${fmt(max)} ${unit}`;
+  }
+  if (min != null) return `≥ ${fmt(min)} ${unit}`;
+  if (max != null) return `≤ ${fmt(max)} ${unit}`;
+  return null;
+}
+
+/** Plain-language rows derived from a plant's display-only reference data.
+ *  Absent metrics are skipped entirely (never shown as 0/—). */
+function buildScienceRows(
+  ref: NonNullable<Recommendation['reference']>,
+): Array<{ label: string; value: string; hint: string }> {
+  const rows: Array<{ label: string; value: string; hint: string }> = [];
+
+  const dli = formatRange(ref.dliMin, ref.dliMax, 'mol/m²/day');
+  if (dli != null) {
+    rows.push({
+      label: 'Daily light budget (DLI)',
+      value: dli,
+      hint: 'Roughly how much light this plant likes to receive over a whole day. Higher means it wants a brighter, sunnier home.',
+    });
+  }
+
+  const photo = formatRange(ref.photoperiodMin, ref.photoperiodMax, 'hours');
+  if (photo != null) {
+    rows.push({
+      label: 'Daily light hours',
+      value: photo,
+      hint: 'How many hours of light per day suit it best.',
+    });
+  }
+
+  const preferredPpfd = formatRange(
+    ref.preferredPpfdMin,
+    ref.preferredPpfdMax,
+    'µmol/m²/s',
+  );
+  const maintenancePpfd = formatRange(
+    ref.maintenancePpfdMin,
+    ref.maintenancePpfdMax,
+    'µmol/m²/s',
+  );
+  if (preferredPpfd != null) {
+    rows.push({
+      label: 'Plant-usable light to thrive (PPFD)',
+      value: preferredPpfd,
+      hint: 'The plant-useful part of light that scientists measure instead of lux — this range is for healthy growth.',
+    });
+  }
+  if (maintenancePpfd != null) {
+    rows.push({
+      label: 'Plant-usable light to survive (PPFD)',
+      value: maintenancePpfd,
+      hint:
+        preferredPpfd != null
+          ? 'The lower range that keeps it merely alive.'
+          : 'The plant-useful part of light that scientists measure instead of lux — this range keeps it alive.',
+    });
+  }
+
+  return rows;
+}
+
+/** Separate, independently-toggled panel showing the plant's DLI / photoperiod /
+ *  PPFD reference data in plain language. Strictly display-only — the disclaimer
+ *  states these are not measured and not used to rank (CLAUDE.md §1, §12). */
+function LightSciencePanel({
+  reference,
+}: {
+  reference: NonNullable<Recommendation['reference']>;
+}) {
+  const rows = buildScienceRows(reference);
+  if (rows.length === 0) return null;
+  return (
+    <View style={styles.science}>
+      <Text style={styles.scienceDisclaimer}>
+        Reference values from plant-science research. The app doesn't measure
+        these and doesn't use them to rank plants — your result is based on the
+        actual light measured at your spot.
+      </Text>
+      {rows.map((row) => (
+        <View key={row.label} style={styles.scienceRow}>
+          <View style={styles.scienceHead}>
+            <Text style={styles.scienceLabel}>{row.label}</Text>
+            <Text style={styles.scienceValue}>{row.value}</Text>
+          </View>
+          <Text style={styles.scienceHint}>{row.hint}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** "Light science (reference) ▾ / ▴" toggle — separate from the score breakdown. */
+function ScienceToggle({
+  expanded,
+  onToggle,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      style={styles.breakdownToggle}
+      activeOpacity={0.8}
+      onPress={onToggle}>
+      <Text style={styles.scienceToggleText}>
+        {expanded ? 'Hide light science ▴' : 'Light science (reference) ▾'}
+      </Text>
+    </TouchableOpacity>
+  );
+}
 
 /** Leaf-tinted ramp behind the #1 pick so it reads as the headline result. */
 const HERO_GRADIENT = ['#1F4A31', '#12301E'] as const;
@@ -23,6 +241,11 @@ type Props = {
   /** Which optional inputs fed this result, e.g.
    *  "light ✓ · distance ✓ · direct sun not captured". */
   inputsLine?: string | null;
+  /** The light reading was taken at night (civil twilight or later) — the lux
+   *  may be a lamp/artificial source, not daylight. The thesis only validates
+   *  daylight light-thresholds, so this caveat must sit on the recommendations
+   *  themselves, not just on the separate sun-estimate card further down. */
+  capturedAtNight?: boolean;
 };
 
 function confidenceColor(
@@ -60,7 +283,19 @@ function tileTint(id: string): string {
   return TILE_TINTS[h % TILE_TINTS.length];
 }
 
-function HeroCard({ r }: { r: Recommendation }) {
+function HeroCard({
+  r,
+  expanded,
+  onToggle,
+  scienceExpanded,
+  onToggleScience,
+}: {
+  r: Recommendation;
+  expanded: boolean;
+  onToggle: () => void;
+  scienceExpanded: boolean;
+  onToggleScience: () => void;
+}) {
   return (
     <LinearGradient
       colors={HERO_GRADIENT as unknown as string[]}
@@ -106,11 +341,35 @@ function HeroCard({ r }: { r: Recommendation }) {
       {r.displayWarning != null && (
         <Text style={styles.warning}>⚠ {r.displayWarning}</Text>
       )}
+
+      <BreakdownToggle expanded={expanded} onToggle={onToggle} />
+      {expanded && <FactorBreakdown r={r} />}
+      {r.reference != null && (
+        <>
+          <ScienceToggle
+            expanded={scienceExpanded}
+            onToggle={onToggleScience}
+          />
+          {scienceExpanded && <LightSciencePanel reference={r.reference} />}
+        </>
+      )}
     </LinearGradient>
   );
 }
 
-function CompactRow({ r }: { r: Recommendation }) {
+function CompactRow({
+  r,
+  expanded,
+  onToggle,
+  scienceExpanded,
+  onToggleScience,
+}: {
+  r: Recommendation;
+  expanded: boolean;
+  onToggle: () => void;
+  scienceExpanded: boolean;
+  onToggleScience: () => void;
+}) {
   return (
     <View style={styles.item}>
       <View style={styles.itemRow}>
@@ -149,12 +408,41 @@ function CompactRow({ r }: { r: Recommendation }) {
       {r.displayWarning != null && (
         <Text style={styles.warning}>⚠ {r.displayWarning}</Text>
       )}
+
+      <BreakdownToggle expanded={expanded} onToggle={onToggle} />
+      {expanded && <FactorBreakdown r={r} />}
+      {r.reference != null && (
+        <>
+          <ScienceToggle
+            expanded={scienceExpanded}
+            onToggle={onToggleScience}
+          />
+          {scienceExpanded && <LightSciencePanel reference={r.reference} />}
+        </>
+      )}
     </View>
   );
 }
 
-export default function RecommendationList({ result, inputsLine }: Props) {
+export default function RecommendationList({
+  result,
+  inputsLine,
+  capturedAtNight,
+}: Props) {
   const [showEliminated, setShowEliminated] = useState(false);
+  // Which plant's score breakdown is open — only one at a time.
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const toggleBreakdown = (id: string) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setExpandedId((cur) => (cur === id ? null : id));
+  };
+  // Which plant's "Light science (reference)" panel is open — independent of
+  // the score breakdown, one at a time.
+  const [scienceId, setScienceId] = useState<string | null>(null);
+  const toggleScience = (id: string) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setScienceId((cur) => (cur === id ? null : id));
+  };
   const { recommended, eliminated } = result;
   const any = recommended[0] ?? eliminated[0];
   const top = recommended[0];
@@ -175,6 +463,16 @@ export default function RecommendationList({ result, inputsLine }: Props) {
         </Text>
       )}
 
+      {capturedAtNight && (
+        <View style={styles.nightWarning}>
+          <Text style={styles.nightWarningText}>
+            🌙 This light reading was taken at night — it may be a lamp or
+            other artificial source, not daylight. Daylight at this spot could
+            be very different; re-measure during the day for a reliable match.
+          </Text>
+        </View>
+      )}
+
       {inputsLine != null && (
         <Text style={styles.inputsLine}>Inputs: {inputsLine}</Text>
       )}
@@ -186,13 +484,28 @@ export default function RecommendationList({ result, inputsLine }: Props) {
         </Text>
       )}
 
-      {top && <HeroCard r={top} />}
+      {top && (
+        <HeroCard
+          r={top}
+          expanded={expandedId === top.plant_id}
+          onToggle={() => toggleBreakdown(top.plant_id)}
+          scienceExpanded={scienceId === top.plant_id}
+          onToggleScience={() => toggleScience(top.plant_id)}
+        />
+      )}
 
       {rest.length > 0 && (
         <>
           <Text style={styles.othersHeading}>Other good matches</Text>
           {rest.map((r) => (
-            <CompactRow key={r.plant_id} r={r} />
+            <CompactRow
+              key={r.plant_id}
+              r={r}
+              expanded={expandedId === r.plant_id}
+              onToggle={() => toggleBreakdown(r.plant_id)}
+              scienceExpanded={scienceId === r.plant_id}
+              onToggleScience={() => toggleScience(r.plant_id)}
+            />
           ))}
         </>
       )}
@@ -244,6 +557,20 @@ const styles = StyleSheet.create({
     color: palette.coral,
     fontSize: 14,
     lineHeight: 22,
+  },
+  nightWarning: {
+    backgroundColor: palette.raised,
+    borderRadius: radii.card,
+    borderWidth: 1,
+    borderColor: palette.amber,
+    padding: 14,
+    marginBottom: 14,
+  },
+  nightWarningText: {
+    color: palette.amber,
+    fontSize: 13,
+    lineHeight: 20,
+    fontWeight: '600',
   },
   item: {
     borderTopWidth: 1,
@@ -431,6 +758,97 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 20,
     marginTop: 6,
+  },
+  breakdownToggle: {
+    marginTop: 12,
+    alignSelf: 'flex-start',
+  },
+  breakdownToggleText: {
+    color: palette.mint,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  breakdown: {
+    marginTop: 12,
+    gap: 12,
+  },
+  factorRow: {},
+  factorHead: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    marginBottom: 5,
+  },
+  factorLabel: {
+    color: palette.text,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  factorWeight: {
+    color: palette.textDim,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  factorTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: palette.inset,
+    overflow: 'hidden',
+    marginBottom: 5,
+  },
+  factorFill: {
+    height: 6,
+    borderRadius: 3,
+  },
+  factorNote: {
+    color: palette.textDim,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  scienceToggleText: {
+    color: palette.textDim,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  science: {
+    marginTop: 12,
+    backgroundColor: palette.inset,
+    borderRadius: radii.control,
+    borderWidth: 1,
+    borderColor: palette.hairline,
+    padding: 14,
+    gap: 12,
+  },
+  scienceDisclaimer: {
+    color: palette.textFaint,
+    fontSize: 11.5,
+    lineHeight: 17,
+    fontStyle: 'italic',
+  },
+  scienceRow: {},
+  scienceHead: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    gap: 10,
+    marginBottom: 3,
+  },
+  scienceLabel: {
+    color: palette.text,
+    fontSize: 13,
+    fontWeight: '800',
+    flexShrink: 1,
+  },
+  scienceValue: {
+    color: palette.mint,
+    fontSize: 13,
+    fontWeight: '800',
+    textAlign: 'right',
+  },
+  scienceHint: {
+    color: palette.textDim,
+    fontSize: 12,
+    lineHeight: 18,
   },
   eliminatedToggle: {
     marginTop: 14,

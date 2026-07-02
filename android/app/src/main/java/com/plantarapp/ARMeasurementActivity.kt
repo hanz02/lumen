@@ -28,7 +28,9 @@ import android.view.WindowManager
 import android.widget.ImageView
 import android.widget.ProgressBar
 import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Anchor
 import com.google.ar.core.Config
 import com.google.ar.core.DepthPoint
@@ -159,10 +161,75 @@ class ARMeasurementActivity : AppCompatActivity() {
      *  selects the matching coach animation/steps. Null for plant distance. */
     private var measureKind: String? = null
 
+    /** True once ArFragment has been attached (setContentView succeeded). Used
+     *  in onResume to guard the availability re-check — if onCreate returned
+     *  early (pre-attach dialog), there is nothing to re-check on resume. */
+    private var arFragmentAttached = false
+
+    /** Show the "AR not supported" dialog and finish with the ar_unsupported
+     *  extra. Idempotent — safe to call from both onCreate and onResume. */
+    private fun showUnsupportedAndFinish() {
+        if (isFinishing) return
+        AlertDialog.Builder(this)
+            .setTitle("AR not supported on this device")
+            .setMessage(
+                "This device can't run AR measurements. Use the tape-measurement " +
+                    "fields instead."
+            )
+            .setCancelable(false)
+            .setPositiveButton("OK") { _, _ ->
+                setResult(
+                    Activity.RESULT_CANCELED,
+                    Intent().putExtra("ar_unsupported", true)
+                )
+                finish()
+            }
+            .show()
+    }
+
+    override fun onResume() {
+        // Wrap super.onResume() so we catch any exception ArFragment propagates
+        // from its internal ARCore install check. On devices like the Redmi Note 10,
+        // checkAvailability() returns SUPPORTED_NOT_INSTALLED initially (causing
+        // ArFragment to redirect to the Play Store), but after the user returns
+        // from "not compatible" in the Play Store, ArFragment's onResume() throws
+        // UnavailableDeviceNotCompatibleException or UnavailableUserDeclinedInstall-
+        // ationException — which without this catch produces a black screen.
+        try {
+            super.onResume()
+        } catch (e: Exception) {
+            if (arFragmentAttached && !isFinishing) showUnsupportedAndFinish()
+            return
+        }
+        if (!arFragmentAttached) return
+        // Belt-and-suspenders: if checkAvailability now reports the device as
+        // incapable (some devices update this after the Play Store interaction),
+        // show the dialog even if no exception was thrown.
+        if (ArCoreApk.getInstance().checkAvailability(this) ==
+            ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE
+        ) {
+            showUnsupportedAndFinish()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Device-level ARCore support is fixed (hardware/OS), unlike a missing-or-
+        // outdated Play Services for AR install (which ArFragment already handles
+        // via the Play Store redirect). If the device can never support AR at all,
+        // bail out BEFORE attaching ArFragment with a clear dialog + a distinct
+        // result extra, instead of leaving a blank camera-less surface behind
+        // (ArFragment has no UI of its own for this permanently-unsupported case).
+        if (ArCoreApk.getInstance().checkAvailability(this) ==
+            ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE
+        ) {
+            showUnsupportedAndFinish()
+            return
+        }
+
         setContentView(R.layout.activity_ar)
+        arFragmentAttached = true
 
         plantDistanceModeButton = findViewById(R.id.plantDistanceModeButton)
         windowMeasureModeButton = findViewById(R.id.windowMeasureModeButton)
@@ -1493,6 +1560,16 @@ class ARMeasurementActivity : AppCompatActivity() {
         }
 
         dialog.show()
+
+        // inflate(..., null) drops the root layout's 300dp width, so the window
+        // would otherwise wrap to its (short) text content and look too narrow.
+        // Set a responsive width with a sensible upper cap.
+        val dialogWidth = (resources.displayMetrics.widthPixels * 0.88f).toInt()
+            .coerceAtMost((340 * resources.displayMetrics.density).toInt())
+        dialog.window?.setLayout(
+            dialogWidth,
+            WindowManager.LayoutParams.WRAP_CONTENT
+        )
 
         // Popup entrance: scale from 88% + fade in, gives the card a natural
         // "pop" without feeling jarring on a dark camera feed.

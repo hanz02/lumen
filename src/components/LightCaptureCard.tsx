@@ -87,6 +87,10 @@ type Props = {
   durationMs: number;
   onStart: () => void;
   onReset: () => void;
+  /** True when the sun was below civil twilight (NIGHT_THRESHOLD_ELEVATION_DEG)
+   *  at the moment this capture completed — the reading is then almost
+   *  certainly artificial light, not daylight. */
+  capturedAtNight?: boolean;
 };
 
 export default function LightCaptureCard({
@@ -94,6 +98,7 @@ export default function LightCaptureCard({
   durationMs,
   onStart,
   onReset,
+  capturedAtNight = false,
 }: Props) {
   return (
     <View style={styles.card}>
@@ -199,6 +204,20 @@ export default function LightCaptureCard({
             </Text>
           </View>
 
+          {capturedAtNight && (
+            <View style={styles.nightWarnBox}>
+              <Text style={styles.nightWarnTitle}>
+                ⚠ It's night-time at this location
+              </Text>
+              <Text style={styles.nightWarnText}>
+                This reading may be coming from other light sources — such as
+                ceiling lights, lamps, screens, or streetlight through the
+                window — rather than daylight. For accurate results, measure
+                this spot again during daylight hours.
+              </Text>
+            </View>
+          )}
+
           <TouchableOpacity
             style={styles.secondaryButton}
             activeOpacity={0.82}
@@ -294,6 +313,26 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
+  },
+  nightWarnBox: {
+    backgroundColor: '#3A2E12',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: palette.amber,
+    padding: 14,
+    marginTop: 14,
+    marginBottom: 4,
+  },
+  nightWarnTitle: {
+    color: palette.amber,
+    fontSize: 13,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  nightWarnText: {
+    color: palette.textDim,
+    fontSize: 12.5,
+    lineHeight: 18,
   },
   progressTrack: {
     height: 6,

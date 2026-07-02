@@ -27,7 +27,10 @@ export interface LightSample {
 }
 
 /** Tuning constants — REL_TOL/ABS_TOL deliberately mirror the offline
- *  extraction so Ch 3 documents one segmentation criterion, not two. */
+ *  extraction so Ch 3 documents one segmentation criterion, not two.
+ *  minCoverage has NO offline equivalent — the offline tool extracts up to 5
+ *  plateaus per file unconditionally and never makes a single accept/reject
+ *  call, so this constant only governs the live single-capture decision. */
 export const PLATEAU = {
   relTol: 0.1,
   absTolLux: 30,
@@ -35,6 +38,14 @@ export const PLATEAU = {
   minPlateauMs: 1000, // shorter stretches are settling, not a reading
   goodPlateauMs: 3000,
   goodCoverage: 0.5,
+  /** The longest plateau must cover at least this fraction of the WHOLE
+   *  capture, or the reading is rejected outright (not even "fair"). Without
+   *  this floor, a single brief calm second salvages a reading even when the
+   *  rest of the 10 s was never steady at all — a one-off lucky pause is not
+   *  meaningful evidence the user actually held the phone still. 0.35 is set
+   *  above the two field-observed "tried hard to destabilise it" cases
+   *  (30% and 14% coverage), so genuine disruption now correctly rejects. */
+  minCoverage: 0.35,
 } as const;
 
 export type CaptureQuality = 'good' | 'fair';
@@ -103,8 +114,11 @@ export function segmentPlateaus(
 /**
  * Reduce a capture to one reading: median of the longest stable plateau
  * (later plateau wins a tie — the user has settled by then). Returns null
- * when no plateau reaches minPlateauMs, i.e. the capture was too unsteady to
- * report a number — the UI should ask for a retry rather than guess.
+ * when no plateau reaches minPlateauMs (too unsteady to even form a 1 s
+ * stretch), OR when the longest plateau found covers less than minCoverage of
+ * the whole capture (a single brief calm second amid sustained chaos is not
+ * meaningful evidence the user actually held the phone still) — either way
+ * the UI should ask for a retry rather than guess.
  */
 export function extractPlateauReading(
   samples: LightSample[],
@@ -134,6 +148,10 @@ export function extractPlateauReading(
   const sortedT = [...samples].sort((a, b) => a.tMs - b.tMs);
   const captureMs = Math.max(captureEndMs - sortedT[0].tMs, stepMs);
   const coverage = Math.min(plateauMs / captureMs, 1);
+
+  // A short calm stretch surrounded by mostly-unsteady readings is not enough
+  // evidence of a genuine hold-still capture — reject rather than guess.
+  if (coverage < PLATEAU.minCoverage) return null;
 
   const quality: CaptureQuality =
     plateauMs >= PLATEAU.goodPlateauMs && coverage >= PLATEAU.goodCoverage

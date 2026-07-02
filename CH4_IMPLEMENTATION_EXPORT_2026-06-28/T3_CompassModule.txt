@@ -1,0 +1,158 @@
+FILE: android/app/src/main/java/com/plantarapp/CompassModule.kt
+LINES: 154
+TAG: [APP]
+----------------------------------------
+package com.plantarapp
+
+import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
+import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.Promise
+import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.ReactContextBaseJavaModule
+import com.facebook.react.bridge.ReactMethod
+
+/**
+ * Streams MAGNETIC-north azimuth samples (rotation-vector sensor) to JS for
+ * the window-aspect capture. Capture protocol: phone held flat (screen up)
+ * with its TOP EDGE pointing out through the window; the emitted azimuth is
+ * the device Y-axis heading. True-north correction (magnetic declination) is
+ * applied on the JS side using the declination from LocationModule — the
+ * compass itself never claims true north.
+ *
+ * TILT is the dominant, field-confirmed source of heading error — NOT
+ * magnetic interference. `SensorManager.getOrientation()`'s azimuth is only
+ * numerically stable when the device is genuinely flat; the natural instinct
+ * to tilt the phone up to read the live heading on screen is exactly the
+ * motion that destabilises it (a well-documented Android gotcha, unrelated to
+ * any external field). A field anomaly originally suspected to be hard-iron
+ * interference from a metal window frame could not be reproduced even with a
+ * magnet held directly against the phone, nor at a distance from any metal —
+ * tilt-during-reading is the far more parsimonious explanation, and it is
+ * also directly fixable: `tiltDeg` below is computed from the rotation
+ * matrix's device-Z-axis-vs-world-up dot product (robust — it does not share
+ * getOrientation()'s instability, since it never decomposes into Euler
+ * angles), so the UI can warn when the phone is held too far from flat.
+ *
+ * Accuracy is ALSO the WORSE-OF two independently tracked sensors (rotation
+ * vector + raw magnetic field, the latter read only for its accuracy, never
+ * its heading) — kept as a secondary signal, but note Android's accuracy
+ * callback for these sensors is independently documented to be throttled or
+ * even hardcoded by some OEMs, so it may not respond to real interference on
+ * every device regardless of this dual-sensor approach.
+ */
+class CompassModule(private val reactContext: ReactApplicationContext) :
+    ReactContextBaseJavaModule(reactContext), SensorEventListener {
+
+    companion object {
+        const val EVENT_NAME = "PlantAR_CompassSample"
+        private const val E_NO_COMPASS = "E_NO_COMPASS"
+        private const val E_ALREADY_RUNNING = "E_ALREADY_RUNNING"
+    }
+
+    private val sensorManager: SensorManager by lazy {
+        reactContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+    }
+
+    private var running = false
+    private var magAvailable = false
+    private var rotationAccuracy = SensorManager.SENSOR_STATUS_ACCURACY_LOW
+    private var magneticAccuracy = SensorManager.SENSOR_STATUS_ACCURACY_LOW
+    private val rotationMatrix = FloatArray(9)
+    private val orientation = FloatArray(3)
+
+    override fun getName(): String {
+        return "CompassModule"
+    }
+
+    @ReactMethod
+    fun start(promise: Promise) {
+        val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+
+        if (sensor == null) {
+            promise.reject(E_NO_COMPASS, "This device has no rotation-vector sensor.")
+            return
+        }
+
+        if (running) {
+            promise.reject(E_ALREADY_RUNNING, "Compass capture already running.")
+            return
+        }
+
+        rotationAccuracy = SensorManager.SENSOR_STATUS_ACCURACY_LOW
+        magneticAccuracy = SensorManager.SENSOR_STATUS_ACCURACY_LOW
+
+        sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_UI)
+
+        val magSensor = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
+        magAvailable = magSensor != null
+        if (magSensor != null) {
+            sensorManager.registerListener(this, magSensor, SensorManager.SENSOR_DELAY_UI)
+        }
+
+        running = true
+        promise.resolve(null)
+    }
+
+    @ReactMethod
+    fun stop() {
+        if (!running) return
+        sensorManager.unregisterListener(this) // unregisters every sensor for this listener
+        running = false
+    }
+
+    override fun onSensorChanged(event: SensorEvent) {
+        if (event.sensor.type != Sensor.TYPE_ROTATION_VECTOR) return
+        if (!reactContext.hasActiveReactInstance()) return
+
+        SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
+        SensorManager.getOrientation(rotationMatrix, orientation)
+        val azimuthDeg =
+            (Math.toDegrees(orientation[0].toDouble()) + 360.0) % 360.0
+
+        // Angle between the device's screen-normal (local Z axis) and world
+        // "up": rotationMatrix[8] is exactly that axis's world-Z component
+        // (device_z mapped into world coordinates), so acos(it) is the tilt
+        // from lying flat — 0° flat, ~90° held upright to read the screen.
+        // Deliberately NOT derived from orientation[1]/[2] (pitch/roll): those
+        // are Euler angles and share azimuth's gimbal-style instability near
+        // a steep tilt, which would undermine the very thing being measured.
+        val tiltDeg = Math.toDegrees(
+            Math.acos(rotationMatrix[8].toDouble().coerceIn(-1.0, 1.0))
+        )
+
+        val sample = Arguments.createMap().apply {
+            putDouble("magneticAzimuthDeg", azimuthDeg)
+            putString("accuracy", accuracyLabel(combinedAccuracy()))
+            putDouble("tiltDeg", tiltDeg)
+        }
+        reactContext.emitDeviceEvent(EVENT_NAME, sample)
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+        when (sensor?.type) {
+            Sensor.TYPE_ROTATION_VECTOR -> rotationAccuracy = accuracy
+            Sensor.TYPE_MAGNETIC_FIELD -> magneticAccuracy = accuracy
+        }
+    }
+
+    /** Lower SensorManager accuracy constants mean WORSE accuracy (UNRELIABLE=0
+     *  .. HIGH=3), so the worse-of-two is the minimum of the two values. */
+    private fun combinedAccuracy(): Int =
+        if (magAvailable) minOf(rotationAccuracy, magneticAccuracy) else rotationAccuracy
+
+    private fun accuracyLabel(a: Int): String = when (a) {
+        SensorManager.SENSOR_STATUS_ACCURACY_HIGH -> "high"
+        SensorManager.SENSOR_STATUS_ACCURACY_MEDIUM -> "medium"
+        SensorManager.SENSOR_STATUS_ACCURACY_LOW -> "low"
+        else -> "unreliable"
+    }
+
+    override fun invalidate() {
+        stop()
+        super.invalidate()
+    }
+}

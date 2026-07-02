@@ -162,3 +162,42 @@ describe('recommend() end-to-end', () => {
     expect(elimIds).toContain('AFRICAN_VIOLET');
   });
 });
+
+describe('display-only reference pass-through (DLI/PPFD/photoperiod)', () => {
+  const REF = {
+    dliMin: 2,
+    dliMax: 5,
+    photoperiodMin: 8,
+    photoperiodMax: 12,
+    maintenancePpfdMin: null,
+    maintenancePpfdMax: null,
+    preferredPpfdMin: 30,
+    preferredPpfdMax: 60,
+  };
+
+  it('passes the reference object straight through onto a recommended plant', () => {
+    const spot: SpotInput = { lux: 5000, distanceToWindowM: 1 };
+    const withRef = recommend([{ ...ZZ_PLANT, reference: REF }], spot);
+    expect(withRef.recommended[0].reference).toEqual(REF);
+  });
+
+  it('passes the reference object through onto an eliminated plant too', () => {
+    const spot: SpotInput = { lux: 100 }; // below ZZ floor 269 -> eliminated
+    const { eliminated } = recommend([{ ...ZZ_PLANT, reference: REF }], spot);
+    expect(eliminated[0].reference).toEqual(REF);
+  });
+
+  it('null when the plant carries no reference data', () => {
+    const spot: SpotInput = { lux: 5000, distanceToWindowM: 1 };
+    expect(recommend([ZZ_PLANT], spot).recommended[0].reference).toBeNull();
+  });
+
+  it('reference data never affects score, band, or factors', () => {
+    const spot: SpotInput = { lux: 5000, distanceToWindowM: 1, directSunPresent: false };
+    const plain = recommend([ZZ_PLANT], spot).recommended[0];
+    const enriched = recommend([{ ...ZZ_PLANT, reference: REF }], spot).recommended[0];
+    expect(enriched.score).toBe(plain.score);
+    expect(enriched.lightBand).toBe(plain.lightBand);
+    expect(enriched.factors).toEqual(plain.factors);
+  });
+});

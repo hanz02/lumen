@@ -32,7 +32,7 @@ import Svg, {
   Stop,
   Text as SvgText,
 } from 'react-native-svg';
-import { APERTURE_PARAMS } from '../sun/solar';
+import { APERTURE_PARAMS, signedAngularDiffDeg } from '../sun/solar';
 import { palette } from '../theme/theme';
 import CardHeader from '../ui/CardHeader';
 
@@ -53,6 +53,8 @@ export type ApertureDiagram = {
   topM: number;
   /** Horizontal plant-to-window distance, m. */
   distanceM: number;
+  /** Signed lateral plant offset from window centre, m (+ = right looking out). */
+  lateralOffsetM: number;
   /** Assumed plant-top height above the floor, m. */
   plantTopM: number;
   /** Window outward-facing bearing, degrees true. */
@@ -71,6 +73,9 @@ export type ApertureDiagram = {
   sunAzEndDeg: number;
   /** "13:05–14:00" — the interval these rays represent. */
   peakLabel: string;
+  /** No direct sun reaches the spot: the span is the whole daylight window and the
+   *  views must never highlight the plant (the sun is drawn missing the opening). */
+  noSun?: boolean;
 };
 
 type ViewMode = 'side' | 'top';
@@ -83,6 +88,9 @@ type Props = {
   perSpot: boolean;
   /** Full side-view geometry; present only for spot-specific estimates with sun. */
   diagram?: ApertureDiagram | null;
+  /** The light reading was captured at night — show the night view, hide the
+   *  interactive sun diagrams (the hours stay valid as POTENTIAL daytime sun). */
+  capturedAtNight?: boolean;
 };
 
 const VBW = 300;
@@ -99,9 +107,16 @@ export default function DirectSunCard({
   intervalLabels,
   perSpot,
   diagram,
+  capturedAtNight = false,
 }: Props) {
   const none = hours <= 0;
   const [view, setView] = useState<ViewMode>('side');
+
+  // With no direct sun, the Top (azimuth) view is the one that explains why —
+  // default to it so the user lands on the informative picture.
+  useEffect(() => {
+    if (diagram?.noSun) setView('top');
+  }, [diagram?.noSun]);
 
   const betaDeg =
     diagram != null
@@ -121,11 +136,25 @@ export default function DirectSunCard({
         kicker="potential sun · clear-sky estimate"
       />
 
-      {none ? (
-        <Text style={styles.noneText}>
-          No direct sun is expected to reach this {perSpot ? 'spot' : 'window'}{' '}
-          today — it relies on indirect light.
-        </Text>
+      {capturedAtNight ? (
+        <>
+          <NightView />
+          <View style={styles.row}>
+            <Text style={styles.hours}>{hours.toFixed(1)}</Text>
+            <Text style={styles.hoursUnit}>h potential direct sun</Text>
+          </View>
+          <View style={styles.pills}>
+            {intervalLabels.map((label) => (
+              <View key={label} style={styles.pill}>
+                <Text style={styles.pillText}>{label}</Text>
+              </View>
+            ))}
+          </View>
+          <Text style={styles.nightNote}>
+            Captured at night — this is the spot’s potential daytime direct sun.
+            Re-measure the light during the day for an accurate reading.
+          </Text>
+        </>
       ) : (
         <>
           {diagram != null && (
@@ -157,8 +186,19 @@ export default function DirectSunCard({
             ) : (
               <TopView geom={diagram} />
             )
-          ) : (
+          ) : none ? null : (
             <SchematicView />
+          )}
+
+          {none && (
+            <Text style={styles.noneText}>
+              No direct sun is expected to reach this{' '}
+              {perSpot ? 'spot' : 'window'} today
+              {diagram != null
+                ? ' — the sun’s path above stays outside the window’s opening'
+                : ''}
+              . It relies on indirect light.
+            </Text>
           )}
 
           <View style={styles.row}>
@@ -166,30 +206,40 @@ export default function DirectSunCard({
             <Text style={styles.hoursUnit}>h potential direct sun</Text>
           </View>
 
-          <View style={styles.pills}>
-            {intervalLabels.map((label) => (
-              <View key={label} style={styles.pill}>
-                <Text style={styles.pillText}>{label}</Text>
-              </View>
-            ))}
-          </View>
+          {intervalLabels.length > 0 && (
+            <View style={styles.pills}>
+              {intervalLabels.map((label) => (
+                <View key={label} style={styles.pill}>
+                  <Text style={styles.pillText}>{label}</Text>
+                </View>
+              ))}
+            </View>
+          )}
 
           {diagram != null && view === 'side' && (
             <Text style={styles.legend}>
-              Side view at {diagram.peakLabel}: the sun rises from{' '}
-              {Math.round(diagram.elevationStartDeg)}° to{' '}
-              {Math.round(diagram.elevationEndDeg)}° above the horizon, clears the{' '}
-              {diagram.sillM.toFixed(2)} m sill, and reaches the plant{' '}
-              {diagram.distanceM.toFixed(1)} m inside the room.
+              {diagram.noSun
+                ? 'Side view: the sun does climb the sky today, but it never lines up with the window opening (see the Top view), so the beam never reaches the plant.'
+                : `Side view at ${diagram.peakLabel}: the sun rises from ${Math.round(
+                    diagram.elevationStartDeg,
+                  )}° to ${Math.round(
+                    diagram.elevationEndDeg,
+                  )}° above the horizon, clears the ${diagram.sillM.toFixed(
+                    2,
+                  )} m sill, and reaches the plant ${diagram.distanceM.toFixed(
+                    1,
+                  )} m inside the room.`}
             </Text>
           )}
           {diagram != null && view === 'top' && (
             <Text style={styles.legend}>
-              Top view at {diagram.peakLabel}: from above, the sun reaches your
-              spot only while it shines in through the window opening — a cone of
-              about ±{betaDeg}° ({diagram.widthM.toFixed(2)} m wide,{' '}
-              {diagram.distanceM.toFixed(1)} m away). A narrower window lights the
-              spot for less of the day.
+              {diagram.noSun
+                ? 'Top view: the travelling dot is the sun’s path across today. It never enters the window’s opening cone for this spot, so no direct sun lands here.'
+                : `Top view at ${diagram.peakLabel}: from above, the sun reaches your spot only while it shines in through the window opening — a cone of about ±${betaDeg}° (${diagram.widthM.toFixed(
+                    2,
+                  )} m wide, ${diagram.distanceM.toFixed(
+                    1,
+                  )} m away). A narrower window lights the spot for less of the day.`}
             </Text>
           )}
         </>
@@ -291,7 +341,9 @@ function SideView({ geom }: { geom: ApertureDiagram }) {
   const bandHigh = topM - d * tanA;
   const hitLow = Math.max(0, bandLow);
   const hitHigh = Math.min(plantTopM, bandHigh);
-  const hasHit = hitHigh > hitLow;
+  // No direct sun reaches the spot today → never paint a "hit" glow (the side
+  // view ignores azimuth, so a vertical overlap here would be misleading).
+  const hasHit = !geom.noSun && hitHigh > hitLow;
 
   const sunPx = X(sunX);
   const sunPy = Y(topM + sunBack * tanA);
@@ -442,25 +494,29 @@ function SideView({ geom }: { geom: ApertureDiagram }) {
 /* The sun sweeps its bearing; it only "counts" inside the cone.       */
 /* ------------------------------------------------------------------ */
 
-/** Signed bearing difference a − b, wrapped to (−180, 180]. */
-const signedDiff = (a: number, b: number) =>
-  ((((a - b) % 360) + 540) % 360) - 180;
-
 function TopView({ geom }: { geom: ApertureDiagram }) {
   const d = Math.max(0.4, geom.distanceM);
   const W = Math.max(0.1, geom.widthM);
-  const edgeDeg = (Math.atan(W / 2 / d) * 180) / Math.PI; // literal opening
-  const betaDeg = edgeDeg + APERTURE_PARAMS.azMarginDeg; // gated cone
-  const edge = edgeDeg * RAD;
-  const beta = betaDeg * RAD;
+  const x = geom.lateralOffsetM ?? 0;
+  // Window edges as SIGNED bearing deviations from the normal, seen from the
+  // (possibly off-centre) plant — same geometry as estimateDirectSunThroughAperture.
+  const rightEdgeDeg = (Math.atan((W / 2 - x) / d) * 180) / Math.PI; // literal opening
+  const leftEdgeDeg = (Math.atan((-W / 2 - x) / d) * 180) / Math.PI;
+  const rightBetaDeg = rightEdgeDeg + APERTURE_PARAMS.azMarginDeg; // gated cone
+  const leftBetaDeg = leftEdgeDeg - APERTURE_PARAMS.azMarginDeg;
+  const betaDeg = rightBetaDeg - leftBetaDeg; // total gated span (for the label)
+  const rightEdge = rightEdgeDeg * RAD;
+  const leftEdge = leftEdgeDeg * RAD;
+  const rightBeta = rightBetaDeg * RAD;
+  const leftBeta = leftBetaDeg * RAD;
 
   // Real sun-bearing deviations at the interval edges, plus a FIXED time
   // lead-in/out. Driving the sweep by clock time (not a padded azimuth range)
   // makes both the sweep and the bright span scale with the true duration:
   // a shorter interval shows a shorter bright sweep, and the bright span is the
   // ACTUAL interval (all gates), not just the azimuth cone.
-  const devS = signedDiff(geom.sunAzStartDeg, geom.windowAzimuthDeg);
-  const devE = signedDiff(geom.sunAzEndDeg, geom.windowAzimuthDeg);
+  const devS = signedAngularDiffDeg(geom.sunAzStartDeg, geom.windowAzimuthDeg);
+  const devE = signedAngularDiffDeg(geom.sunAzEndDeg, geom.windowAzimuthDeg);
   const durMin = Math.max(1, geom.intervalMinutes);
   const MARGIN_MIN = 25;
   const totalMin = durMin + 2 * MARGIN_MIN;
@@ -473,14 +529,16 @@ function TopView({ geom }: { geom: ApertureDiagram }) {
   const P = { x: VBW / 2, y: 172 };
   const dPix = 80;
   const winY = P.y - dPix;
-  const halfWpx = dPix * Math.tan(edge);
+  // Opening edges projected onto the wall — asymmetric when the plant is off-centre.
+  const xL = P.x + dPix * Math.tan(leftEdge);
+  const xR = P.x + dPix * Math.tan(rightEdge);
   const Rcone = 150;
   const Rsun = 138;
 
-  // gated azimuth cone (the sector that counts as direct sun)
+  // gated azimuth cone (the sector that counts as direct sun), left edge → right edge
   const sect: string[] = [`${P.x},${P.y}`];
   for (let i = 0; i <= 12; i++) {
-    const a = -beta + (2 * beta * i) / 12;
+    const a = leftBeta + ((rightBeta - leftBeta) * i) / 12;
     sect.push(`${P.x + Rcone * Math.sin(a)},${P.y - Rcone * Math.cos(a)}`);
   }
 
@@ -513,8 +571,9 @@ function TopView({ geom }: { geom: ApertureDiagram }) {
   const phase = (((t % PERIOD) + PERIOD) % PERIOD) / PERIOD; // 0 → 1, sawtooth
   const tm = phase * totalMin; // minutes into the swept window
   const theta = devAt(tm) * RAD;
-  // bright ONLY during the real interval (bounded by every gate, not just azimuth)
-  const lit = tm >= MARGIN_MIN && tm <= MARGIN_MIN + durMin;
+  // bright ONLY during the real interval (bounded by every gate, not just azimuth);
+  // never when no direct sun reaches the spot (the dot just traces the day's path)
+  const lit = !geom.noSun && tm >= MARGIN_MIN && tm <= MARGIN_MIN + durMin;
   const fade = Math.min(1, Math.min(phase, 1 - phase) / 0.06); // soften wrap
   const pulse = (Math.sin((2 * Math.PI * t) / 2400) + 1) / 2;
 
@@ -522,8 +581,8 @@ function TopView({ geom }: { geom: ApertureDiagram }) {
   const sunY = P.y - Rsun * Math.cos(theta);
   const crossX = P.x + dPix * Math.tan(theta);
 
-  const labelX = P.x + 0.72 * Rcone * Math.sin(beta);
-  const labelY = P.y - 0.72 * Rcone * Math.cos(beta);
+  const labelX = P.x + 0.72 * Rcone * Math.sin(rightBeta);
+  const labelY = P.y - 0.72 * Rcone * Math.cos(rightBeta);
 
   return (
     <View style={styles.diagramWrap}>
@@ -534,16 +593,16 @@ function TopView({ geom }: { geom: ApertureDiagram }) {
         {/* gated azimuth cone */}
         <Polygon points={sect.join(' ')} fill={palette.amber} fillOpacity={0.13} />
         {/* literal opening edges (geometric, dashed) */}
-        <Line x1={P.x} y1={P.y} x2={P.x - Rcone * Math.sin(edge)} y2={P.y - Rcone * Math.cos(edge)} stroke={palette.amber} strokeWidth={1} strokeOpacity={0.45} strokeDasharray="4 4" />
-        <Line x1={P.x} y1={P.y} x2={P.x + Rcone * Math.sin(edge)} y2={P.y - Rcone * Math.cos(edge)} stroke={palette.amber} strokeWidth={1} strokeOpacity={0.45} strokeDasharray="4 4" />
+        <Line x1={P.x} y1={P.y} x2={P.x + Rcone * Math.sin(leftEdge)} y2={P.y - Rcone * Math.cos(leftEdge)} stroke={palette.amber} strokeWidth={1} strokeOpacity={0.45} strokeDasharray="4 4" />
+        <Line x1={P.x} y1={P.y} x2={P.x + Rcone * Math.sin(rightEdge)} y2={P.y - Rcone * Math.cos(rightEdge)} stroke={palette.amber} strokeWidth={1} strokeOpacity={0.45} strokeDasharray="4 4" />
 
         {/* window facing (normal) */}
         <Line x1={P.x} y1={P.y} x2={P.x} y2={winY - 22} stroke={palette.textFaint} strokeWidth={1} strokeDasharray="3 4" />
 
-        {/* wall with the window opening cut out */}
-        <Line x1={0} y1={winY} x2={P.x - halfWpx} y2={winY} stroke={palette.raised} strokeWidth={6} />
-        <Line x1={P.x + halfWpx} y1={winY} x2={VBW} y2={winY} stroke={palette.raised} strokeWidth={6} />
-        <Line x1={P.x - halfWpx} y1={winY} x2={P.x + halfWpx} y2={winY} stroke={palette.mint} strokeWidth={3} strokeLinecap="round" />
+        {/* wall with the window opening cut out (opening shifts when off-centre) */}
+        <Line x1={0} y1={winY} x2={xL} y2={winY} stroke={palette.raised} strokeWidth={6} />
+        <Line x1={xR} y1={winY} x2={VBW} y2={winY} stroke={palette.raised} strokeWidth={6} />
+        <Line x1={xL} y1={winY} x2={xR} y2={winY} stroke={palette.mint} strokeWidth={3} strokeLinecap="round" />
 
         {/* sun travel guide + active ray */}
         <Polyline points={pathPts.join(' ')} fill="none" stroke={palette.hairline} strokeWidth={1.5} strokeDasharray="2 5" />
@@ -573,11 +632,11 @@ function TopView({ geom }: { geom: ApertureDiagram }) {
         <SvgText x={P.x} y={P.y + 16} fill={palette.textDim} fontSize={8.5} textAnchor="middle">
           plant
         </SvgText>
-        <SvgText x={P.x + halfWpx + 5} y={winY - 5} fill={palette.textDim} fontSize={8.5}>
+        <SvgText x={xR + 5} y={winY - 5} fill={palette.textDim} fontSize={8.5}>
           window
         </SvgText>
         <SvgText x={labelX} y={labelY} fill={palette.amber} fontSize={9} fontWeight="700" textAnchor="middle">
-          ±{Math.round(betaDeg)}°
+          {Math.round(betaDeg)}°
         </SvgText>
       </Svg>
     </View>
@@ -612,6 +671,73 @@ function SchematicView() {
         <Ellipse cx={205} cy={74} rx={10} ry={7} fill={palette.mint} fillOpacity={0.9} />
       </Svg>
       <Text style={styles.schematicTag}>illustration · facing-only estimate</Text>
+    </View>
+  );
+}
+
+/* ------------------------------------------------------------ */
+/* Night view: shown when the light was captured after dark.    */
+/* A calm moon + stars (the sun diagrams make no sense at night) */
+/* ------------------------------------------------------------ */
+
+function NightView() {
+  const [t, setT] = useState(0);
+  useEffect(() => {
+    if (typeof requestAnimationFrame !== 'function') return undefined;
+    let raf = 0;
+    let start = 0;
+    let last = 0;
+    const tick = (now: number) => {
+      if (!start) start = now;
+      if (now - last >= 60) {
+        last = now;
+        setT(now - start);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  const twinkle = (Math.sin((2 * Math.PI * t) / 2600) + 1) / 2;
+  const stars = [
+    { x: 60, y: 34, r: 1.6, ph: 0 },
+    { x: 110, y: 22, r: 1.1, ph: 0.5 },
+    { x: 168, y: 40, r: 1.8, ph: 0.2 },
+    { x: 232, y: 26, r: 1.2, ph: 0.7 },
+    { x: 268, y: 52, r: 1.5, ph: 0.35 },
+    { x: 92, y: 64, r: 1.0, ph: 0.85 },
+    { x: 210, y: 70, r: 1.3, ph: 0.15 },
+  ];
+
+  return (
+    <View style={styles.diagramWrap}>
+      <Svg width={VBW} height={120} viewBox={`0 0 ${VBW} 120`}>
+        <Defs>
+          <LinearGradient id="night" x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0" stopColor="#16314A" stopOpacity={0.55} />
+            <Stop offset="1" stopColor={palette.surface} stopOpacity={0} />
+          </LinearGradient>
+        </Defs>
+        <Rect x={0} y={0} width={VBW} height={120} fill="url(#night)" />
+
+        {stars.map((s, i) => (
+          <Circle
+            key={i}
+            cx={s.x}
+            cy={s.y}
+            r={s.r}
+            fill={palette.mint}
+            fillOpacity={0.35 + 0.6 * ((twinkle + s.ph) % 1)}
+          />
+        ))}
+
+        {/* crescent moon: a bright disc with an offset surface-coloured disc */}
+        <Circle cx={150} cy={58} r={26} fill="#FFE9A8" fillOpacity={0.18 + twinkle * 0.12} />
+        <Circle cx={150} cy={58} r={18} fill="#E9EFC9" />
+        <Circle cx={141} cy={53} r={16} fill={palette.surface} />
+      </Svg>
+      <Text style={styles.schematicTag}>night-time · sun path hidden</Text>
     </View>
   );
 }
@@ -792,6 +918,12 @@ const styles = StyleSheet.create({
     color: palette.textDim,
     fontSize: 14,
     lineHeight: 21,
+  },
+  nightNote: {
+    color: palette.amber,
+    fontSize: 12.5,
+    lineHeight: 19,
+    marginTop: 12,
   },
   how: {
     marginTop: 16,

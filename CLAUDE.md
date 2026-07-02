@@ -5,7 +5,7 @@
 > For current code internals, read the actual project files — this file says
 > what the system is _supposed_ to be, not what any single file currently contains.
 
-Do not make any changes until you have 95% confidence in what you need to build. Ask me follow up questions until you reach that confidence. Keep the MD files line within 300 lines.
+Do not make any changes until you have 95% confidence in what you need to build. Ask me follow up questions until you reach that confidence. Keep the MD files line within 400 lines.
 
 ---
 
@@ -127,13 +127,17 @@ Pure TypeScript, no react-native imports, unit-tested against known ephemeris va
   facing sector at a given time, above the elevation floor.
 - **`estimateDirectSunThroughAperture(...)`** — spot-specific model, the **only place AR
   window dimensions enter computation**. Inputs: `widthM`, `sillM`, `topM` (= sill + height),
-  `distanceM`. Two tests per 5-min sample: (1) **azimuth-cone** — sun azimuth within
-  `atan((W/2)/d) + azMarginDeg` (6°) of the window's facing; (2) **vertical penetration-band**
-  — `sillM − d·tan(α)` .. `topM − d·tan(α)` (α = elevation) must overlap
+  `distanceM`, optional signed `lateralOffsetM` (plant position along the window width; + =
+  right looking out; default 0 = centre-line). Two tests per 5-min sample: (1) **azimuth-cone**
+  — signed sun-azimuth deviation must fall between the window's two edges as seen from the
+  (possibly off-centre) plant, `atan((±W/2 − x)/d) ± azMarginDeg` (6°); at `x=0` this is the
+  original symmetric `±(atan(W/2/d)+margin)` cone (backward compatible); (2) **vertical
+  penetration-band** — `sillM − d·tan(α)` .. `topM − d·tan(α)` (α = elevation) must overlap
   `[0, assumedPlantTopM ± vertMarginM]` (plant top 0.4 m, margin 0.1 m). Passing samples cluster
-  into `SunInterval{startMin,endMin}`s, summed into `hours`. Fixed centre-line/height/margin
-  assumptions avoid false precision from noisy vertical-surface AR (Szerman et al. 2014 + LBNL
-  daylighting rules).
+  into `SunInterval{startMin,endMin}`s, summed into `hours`. The **vertical test stays on the
+  perpendicular distance** (lateral slant is below the margins — avoids false precision from
+  noisy vertical-surface AR; Szerman et al. 2014 + LBNL daylighting rules). Lateral position is
+  a **geometric** refinement (justified by trig + unit tests, not field-validated lux).
 - **App selection** (`App.tsx` `sunResult` useMemo): prefers `estimateDirectSunThroughAperture`
   when `windowDims.width/height/sill` + `distanceResult` are all present (`perSpot: true`),
   else `estimateDirectSun` (`perSpot: false`). Needs `aspectInfo.trueAzimuthDeg` + GPS (`geo`).
@@ -177,16 +181,44 @@ therefore an estimate**, validated against tape measurement (`ref_tape_cm` in th
 
 - **Lux capture** (`src/sensor/lightSensor.ts`, `plateau.ts`, `useLightCapture.ts`): Android
   `TYPE_LIGHT` (on-change), 10 s guided capture, hold-last resampling at 10 Hz, then
-  **plateau-median segmentation** (`max(10%, 30 lx)` band, longest plateau, `null` if none) —
-  the same criterion used offline (`tools/extract_phone_readings.py`), so Ch 3 can describe
-  one criterion for both. Captured value stays RAW; engine calibrates it (§4 "both" mode).
+  **plateau-median segmentation** (`max(10%, 30 lx)` band, longest plateau) — the segmentation
+  criterion matches the offline tool (`tools/extract_phone_readings.py`), so Ch 3 can describe
+  one criterion for both. **Rejects (`null`) if no plateau reaches `minPlateauMs` (1 s) OR the
+  longest plateau covers under `minCoverage` (35%) of the whole capture** — the coverage floor
+  has no offline equivalent (that tool extracts up to 5 plateaus per file unconditionally, with
+  no per-observation accept/reject decision); it exists only for the live single-capture call,
+  added after manual device testing showed a single brief calm second salvaged a "Fair" reading
+  even when most of the 10 s was deliberately disrupted (real field cases: 30% and 14%
+  coverage both still passed under the old "any ≥1 s anywhere" rule). Captured value stays RAW;
+  engine calibrates it (§4 "both" mode).
 - **Compass capture** (`src/sensor/compass.ts`, `useCompassCapture.ts`, `CompassModule.kt`):
   circular-mean heading sampling. Window-facing aspect is the optional wizard step (a dead
-  magnetometer must not dead-end the flow).
+  magnetometer must not dead-end the flow). The live read shows a **rotating rose + cardinal
+  name** (`src/sensor/cardinal.ts`) + degrees with a haptic tick per cardinal change. **Tilt, not
+  magnetic interference, is the field-confirmed cause of a wrong heading** — `getOrientation()`'s
+  azimuth is only stable when the phone is flat, and tilting it up to read the number (natural
+  human instinct) destabilises it; a magnet pressed to the phone could not reproduce an original
+  flip, disproving the earlier hard-iron-interference theory. `CompassModule.kt` emits `tiltDeg`
+  (from the rotation matrix's device-Z-vs-world-up angle, not pitch/roll, which share the same
+  instability); the UI warns past 30° (`isTiltedTooFar`, `cardinal.ts`) — the reliable safeguard.
+  Accuracy (worse-of rotation-vector + raw magnetic-field) is kept as a secondary signal only —
+  Android's accuracy callback is independently documented to be throttled/hardcoded on some OEMs.
+- **Night ambient-darkness threshold** (`NIGHT_THRESHOLD_ELEVATION_DEG = -6°` in `solar.ts`) is a
+  **separate constant from** `DIRECT_SUN_PARAMS.minElevationDeg` (3°) — the latter is a sun-BEAM
+  physics floor for the SPA, the former is civil twilight (when ambient outdoor light meaningfully
+  fades), used only for the `daylightStatus`/`capturedAtNight` UI checks. Conflating the two
+  flagged an early-evening sky (sun just below the horizon, still bright) as "night" the instant
+  elevation went negative. A post-capture disclaimer (`LightCaptureCard`) now warns when a reading
+  was taken at night that it may be artificial light, not daylight.
 - **Location** (`LocationModule.kt`, `src/location/location.ts`): device GPS one-shot
   (coarse) + `GeomagneticField` declination converts the compass's magnetic azimuth to true
   north (`trueAzimuthDeg`); falls back to magnetic azimuth if no GPS fix (declination ≪ 90°
   aspect sectors).
+- **Lateral plant position** (`SpotDistanceCard` picker → `App.tsx` `plantLateralFrac` ∈
+  [-1,1]): optional tap control after the AR distance, recording where the plant sits along the
+  window (far-left … centre … far-right). Converted to signed metres (`frac × widthM/2`) and fed
+  to `estimateDirectSunThroughAperture` as `lateralOffsetM` (§5). Default centre = unchanged
+  behaviour; refines the direct-sun estimate (hence the sun factor + scorch gate) only.
 
 ---
 
@@ -227,15 +259,23 @@ are the **user's** to fill — do not edit that sheet.
 
 Append-only CSV in `filesDir` + Android share sheet (`EvalLogModule.kt`), columns in
 `src/eval/evalRow.ts` / written via `evalLog.ts`, surfaced by `EvaluationCard.tsx`. Each row
-captures AR distance, window dims, raw/calibrated lux, timestamps, and optional `ref_tape_cm` /
-`ref_meter_lux` fields for AR-vs-tape and phone-vs-UT383 pairs (the Ch 4 data source).
-`EvaluationCard` log-clear uses `ConfirmModal` (destructive), not OS `Alert`.
+captures AR distance, window dims, raw/calibrated lux, timestamps, and optional reference
+fields: **4 explicit tape columns** (`ref_tape_distance/width/height/sill_cm` — one row
+validates all four AR-fallible dimensions, not just one) and **5 UT383 columns + median**
+(`ref_meter_lux_1..5`/`_median`), mirroring the original 5-reading field protocol. Also
+non-engine context: `plant_lateral_offset_m` (§7), `plant_distance_cm` +
+`plant_distance_source` (`ar`/`manual` — the tape fallback), `capture_sun_elevation_deg` (sun
+elevation when the lux was captured — lets night/dusk rows be filtered), and a tapped
+`sky_condition` (sunny/partly_cloudy/overcast/indoor_lit) — the honest handling of weather
+(measured lux already embeds it; never an engine input). `EvaluationCard` log-clear uses
+`ConfirmModal` (destructive), not OS `Alert`.
 
 ---
 
 ## 10. Frontend / UI architecture
 
-**Locked step wizard** (not a single scroll), order: Welcome → 1 Plant spot (AR distance) →
+**Locked step wizard** (not a single scroll), order: Welcome → 1 Plant spot (AR distance, with a
+manual tape-cm fallback) →
 2 Window size → 3 Spot light (lux) → 4 Window facing (optional) → 5 Results + evaluation. A
 step cannot be opened until the previous required capture is done — enforced by `maxReachable`
 in `App.tsx`, shown by `src/ui/StepProgress.tsx` (completed=check, current=ring,
@@ -251,34 +291,94 @@ reminders) — see §12.
 `ConfirmModal` (destructive, dimmed scrim) — both replace OS `Alert.alert`.
 
 **Results screen order:** `RecommendationList` (§4) first — #1 pick is a gradient **Hero card**
-(large name, score, fill bar, BEST MATCH badge, explanation); runners-up as compact rows. Then
-`DirectSunCard` (§5, hours + interval pills + animated side/top SVG; α° label at SVG top-right).
-Then `EvaluationCard` (§9).
+(large name, score, fill bar, BEST MATCH badge, explanation); runners-up as compact rows. Every
+card has a **"See score breakdown"** accordion (one open at a time) drawing the four weighted
+factors as coloured bars from the engine's `factors`. Then
+`DirectSunCard` (§5, hours + interval pills + animated side/top SVG; α° label at SVG top-right;
+the **top view draws the asymmetric, off-centre cone** for a lateral spot). When the lux was
+captured at night (`capturedAtNight`, from `captureSunElevationDeg` <
+`NIGHT_THRESHOLD_ELEVATION_DEG` — civil twilight, **not** the SPA's `minElevationDeg`; see §7), the
+card shows a calm **night view** (moon + stars) and hides the side/top toggle — the hours stay
+shown as POTENTIAL daytime sun. Even at **0 h** the card still draws the Side/Top diagram (the
+sun's full-day path shown *missing* the window — `daylightWindow` in `solar.ts` supplies the
+span, `noSun` makes the views never highlight the plant), so the user sees *where* the sun is.
+Then `EvaluationCard` (§9). The daytime warning before capture is still `LightConditionsModal`.
 
 Jest stubs the native UI libs (`react-native-svg`, `react-native-linear-gradient`, Lottie) in
 `jest.setup.js`.
 
 ---
 
-## 11. Current status & pending work (as of 2026-06-16)
+## 11. Current status & pending work (as of 2026-06-23)
 
 - **Working / built:** full feature set complete — AR, lux capture, SPA, recommendation engine,
   Excel→SQLite, compass + GPS, eval log, step-wizard UI, all animations. Build is done.
 - **Thesis:** Ch 2 done. Chs 1, 3, 4, 5 outstanding. Remaining: evaluation data + write-up.
 
-**DONE 2026-06-16 — UI/UX overhaul + calibration range fix:**
-1. **Lumen rebrand** — `LumenMark.tsx` SVG logo; Welcome hero row + top bar; `app.json`, `strings.xml`.
-2. **Welcome** — trimmed copy (one-line subtitle, short feature blurbs, demoted footnote).
-3. **WindowMeasureCard** — per-dimension icon tiles (↔/↕/⬆-from-floor) + scan-icon AR button.
-4. **AR coach per measurement** — `measureKind` passed `arMeasurement.ts` → `ARModule.kt` → activity;
-   distinct vector animations per dimension (sill = floor-to-sill via `coachFloor` + `ar_coach_floor.xml`).
-5. **AR result dialog** — vertical button stack (primary top); scale+fade popup entrance (240 ms).
-6. **Hero recommendation** — `RecommendationList` #1 → gradient hero card; results screen reordered.
-7. **Plain-language wording** — `explain.ts`, `scoring.ts`, `DirectSunCard.tsx` de-jargoned.
-8. **Calibration range guard** — raw lux returned unchanged when < 200 lx; α° label to SVG top-right.
+**DONE 2026-06-23 (round 11) — distance-edit cascade, GPS retry, AR-unsupported fix, exit-confirm:**
+**Distance-edit invalidation** — editing distance in Step 1 after light was already captured
+resets light to idle (forcing a redo; `maxReachable` re-locks Facing/Plants) + resets compass;
+once light is redone, a single-OK popup sends the user to re-check Facing (skippable from
+there). **Light-capture-end vibration** (no test case, per request). **Results-loading fix** —
+the loading screen now only replays when `recommendations` (a `useMemo`) actually changed, not
+on every plain re-entry. **Night warning on `RecommendationList`** itself, not just
+`DirectSunCard`. **GPS retry** — granting permission doesn't guarantee a fix; added a retry
+button (Facing card + Results sun-prompt) since the old one-shot effect never retried.
+**AR-unsupported device** (field-confirmed, Redmi Note 10) — `ARMeasurementActivity.kt` now
+checks `ArCoreApk.checkAvailability()` before attaching the AR fragment and shows a dialog
+instead of a black screen (`E_AR_UNSUPPORTED`). **Exit-confirm** — Back from Step 1 with any
+progress shows a destructive confirm modal; Welcome's "Begin" now calls the full `startOver()`
+reset. TC-35..38 added; TC-14/20/23/30/34 updated. 118 tests pass, tsc clean.
 
-**DONE 2026-06-15:** `LightCaptureCard` orientation animation; AR frosted-glass dialog;
-`LightConditionsModal` daytime check; `DirectSunCard` Side/Top SVG diagrams; `WindowMeasureCard` sill UX.
+**DONE 2026-06-22 (round 10) — eval-form 4 tape + 5 lux fields:** `EvaluationCard`'s single
+`tapeCm`/`meterLux` fields replaced with 4 explicit tape fields + 5 UT383 fields + a live
+median (see §9). Schema change — any rows already saved under the old 2-field schema will hit
+the "older column format" guard on next save (export, then clear). `evalRow.test.ts` updated;
+112 tests pass.
+
+**DONE 2026-06-22 (round 9) — results loading animation:** a deliberate ~2.4 s delight-only
+pause (`src/ui/ResultsLoadingScreen.tsx`) before Results reveals — `HeroPlant` under a sun that
+swings up/down then a moon that swings up/down, plus a 3-line cascading status-sentence stack
+(newest on top, older fading below) cycling plain-language engine steps. Triggers on every
+arrival at Results from another step (footer button, step-rail jump, or Facing-skip) via one
+shared step-transition effect. Engine stays instant — presentation only. Added TC-34.
+
+**DONE 2026-06-22 (round 8) — coverage audit:** TC-31 (every plant gated out → empty-list
+message), TC-32 (AR cancelled via back button), TC-33 (two "New spot" cycles leave no leftover
+state — guard for the TC-28 bug class). Plant-DB load-failure UI flagged code-inspected only.
+
+**DONE 2026-06-22 (round 7) — capture-leak fix:** leaving Step 3/4 mid-capture left the
+light/compass sensor running in the background (hooks live at App's top level, torn down only
+on unmount) — fixed with a step-change effect. Added TC-27 (window skip+undo), TC-28 (this
+fix), TC-29 (log-clear confirm), TC-30 (compass fallback).
+
+**DONE 2026-06-22 (round 6) — compass tilt detection (metal-frame theory disproven):**
+TC-21 couldn't reproduce the heading flip with a magnet/speaker, nor away from metal —
+disproving hard-iron interference; tilting the phone to read the number destabilises
+`getOrientation()`'s azimuth instead. `CompassModule.kt` emits `tiltDeg`; UI warns past 30°.
+
+**DONE 2026-06-22 (round 5) — plateau coverage floor (real device-testing finding):**
+TC-02 found the OLD rule ("any ≥1 s calm stretch anywhere") let a brief calm moment salvage a
+"Fair" reading under sustained disruption (3.0 s/30% and 1.4 s/14% both still passed). Added
+`PLATEAU.minCoverage = 0.35` (§7; no offline-tool equivalent). 3 regression tests pin the field
+results + a just-above-floor case.
+
+**DONE 2026-06-21 (round 4):** Night threshold decoupled — `NIGHT_THRESHOLD_ELEVATION_DEG`
+(civil twilight, -6°) replaces the SPA's `minElevationDeg` (3°) for the day/night UI check
+(§7); post-capture artificial-light disclaimer. Compass dual-sensor accuracy (superseded by
+round 6's tilt detection). Real CSV export via `FileProvider`. TC-05 — AR is floor-to-floor.
+
+**DONE 2026-06-21 (round 3):** Factor-breakdown accordion on `RecommendationList` (green/amber/
+red bars per weighted factor). Manual distance fallback (`manualDistanceCm`/
+`effectiveDistanceM`, exactly one source active); eval log gains `plant_distance_source`.
+Calibration cross-validation (5-fold CV, held-out MAE 268 lx/MAPE 15%, shipped constants
+unchanged). Engine-vs-evidence correctness: 620/620 gate+band decisions match.
+
+**DONE 2026-06-15 to 06-20 (rounds 1–2 + earlier, condensed)** — lateral plant position
+(asymmetric SPA cone, `lateralOffsetM`, §5); Lumen rebrand + app icon; calibration range guard
+(<200 lx returns raw); first IV/DV evaluation harness (measured-vs-fixed-label, 55% same-band,
+engine differentiates 89%); eval-log metadata columns, night results view, compass figure-8
+caution (revised by round 6), 0-h sun diagram, AR coach animations, wireless APK deploy guide.
 
 ---
 

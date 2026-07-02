@@ -1,0 +1,231 @@
+################################################################################
+# F. Small files in FULL
+################################################################################
+
+=== FULL: src/sensor/useCompassCapture.ts  (101 lines) ===
+   1  /** Window-aspect capture state machine. Protocol (shown in the UI): hold the
+   2   *  phone flat with its top edge pointing out through the window, wait for the
+   3   *  live heading to settle, tap Capture. The captured value is the CIRCULAR
+   4   *  MEAN of the last ~12 samples (single compass readouts jitter by several
+   5   *  degrees), and it is the MAGNETIC azimuth — App.tsx adds the declination
+   6   *  from the location fix to get true north for the SPA estimate. */
+   7  
+   8  import { useCallback, useEffect, useRef, useState } from 'react';
+   9  import {
+  10    startCompassStream,
+  11    type CompassAccuracy,
+  12    type CompassSample,
+  13    type CompassStream,
+  14  } from './compass';
+  15  
+  16  const SMOOTHING_WINDOW = 12;
+  17  
+  18  export type CompassCaptureState =
+  19    | { phase: 'idle' }
+  20    | {
+  21        phase: 'reading';
+  22        azimuthDeg: number | null;
+  23        accuracy: CompassAccuracy;
+  24        tiltDeg: number | null;
+  25      }
+  26    | {
+  27        phase: 'captured';
+  28        magneticAzimuthDeg: number;
+  29        accuracy: CompassAccuracy;
+  30        tiltDeg: number;
+  31      }
+  32    | { phase: 'failed'; reason: string };
+  33  
+  34  /** Circular mean of bearings in degrees (a plain average breaks at the
+  35   *  359°/1° wrap). */
+  36  export function circularMeanDeg(bearings: number[]): number {
+  37    let x = 0;
+  38    let y = 0;
+  39    for (const b of bearings) {
+  40      x += Math.cos((b * Math.PI) / 180);
+  41      y += Math.sin((b * Math.PI) / 180);
+  42    }
+  43    const mean = (Math.atan2(y, x) * 180) / Math.PI;
+  44    return (mean + 360) % 360;
+  45  }
+  46  
+  47  export function useCompassCapture() {
+  48    const [state, setState] = useState<CompassCaptureState>({ phase: 'idle' });
+  49    const bufferRef = useRef<CompassSample[]>([]);
+  50    const streamRef = useRef<CompassStream | null>(null);
+  51  
+  52    const cleanup = useCallback(() => {
+  53      streamRef.current?.stop();
+  54      streamRef.current = null;
+  55    }, []);
+  56  
+  57    useEffect(() => cleanup, [cleanup]);
+  58  
+  59    const start = useCallback(async () => {
+  60      if (streamRef.current) return;
+  61      bufferRef.current = [];
+  62      try {
+  63        streamRef.current = await startCompassStream((sample) => {
+  64          const buf = bufferRef.current;
+  65          buf.push(sample);
+  66          if (buf.length > SMOOTHING_WINDOW) buf.shift();
+  67          setState({
+  68            phase: 'reading',
+  69            azimuthDeg: circularMeanDeg(buf.map((s) => s.magneticAzimuthDeg)),
+  70            accuracy: sample.accuracy,
+  71            tiltDeg: sample.tiltDeg,
+  72          });
+  73        });
+  74        setState({ phase: 'reading', azimuthDeg: null, accuracy: 'low', tiltDeg: null });
+  75      } catch (error: any) {
+  76        setState({
+  77          phase: 'failed',
+  78          reason: error?.message ?? 'Compass unavailable.',
+  79        });
+  80      }
+  81    }, []);
+  82  
+  83    const capture = useCallback(() => {
+  84      const buf = bufferRef.current;
+  85      if (buf.length === 0) return;
+  86      cleanup();
+  87      setState({
+  88        phase: 'captured',
+  89        magneticAzimuthDeg: circularMeanDeg(buf.map((s) => s.magneticAzimuthDeg)),
+  90        accuracy: buf[buf.length - 1].accuracy,
+  91        tiltDeg: buf[buf.length - 1].tiltDeg,
+  92      });
+  93    }, [cleanup]);
+  94  
+  95    const reset = useCallback(() => {
+  96      cleanup();
+  97      setState({ phase: 'idle' });
+  98    }, [cleanup]);
+  99  
+ 100    return { state, start, capture, reset };
+ 101  }
+
+=== FULL: src/data/plantStore.ts  (35 lines) ===
+   1  /** Bridge wrapper for PlantDataModule: loads the bundled plant rows once per
+   2   *  JS session and maps them to engine Plant objects. Mapping logic lives in
+   3   *  mapPlant.ts so it stays unit-testable without the native side. */
+   4  
+   5  import { NativeModules } from 'react-native';
+   6  import type { Plant } from '../engine/types';
+   7  import { mapRowToPlant, type PlantDbRow } from './mapPlant';
+   8  
+   9  const { PlantDataModule } = NativeModules;
+  10  
+  11  export interface PlantDbMeta {
+  12    schema_version: string;
+  13    generated_at: string;
+  14    plant_rows: string;
+  15    evidence_rows: string;
+  16    [key: string]: string;
+  17  }
+  18  
+  19  let cache: Plant[] | null = null;
+  20  
+  21  /** Loads (and caches) all plants from the bundled SQLite. Rejects with
+  22   *  E_DB_UNAVAILABLE from the native side if the database cannot be read. */
+  23  export async function loadPlants(): Promise<Plant[]> {
+  24    if (cache) return cache;
+  25    const rows: PlantDbRow[] = await PlantDataModule.getPlants();
+  26    cache = rows.map(mapRowToPlant);
+  27    return cache;
+  28  }
+  29  
+  30  /** Database provenance (schema_version, generated_at, row counts) — shown in
+  31   *  the UI footer and recorded with evaluation logs. Async so a missing native
+  32   *  module rejects instead of throwing synchronously. */
+  33  export async function loadPlantDbMeta(): Promise<PlantDbMeta> {
+  34    return PlantDataModule.getMeta();
+  35  }
+
+=== FULL: src/sensor/lightSensor.ts  (43 lines) ===
+   1  /** Thin JS wrapper around the native LightSensorModule (TYPE_LIGHT stream).
+   2   *  All reduction logic lives in plateau.ts so it stays unit-testable; this
+   3   *  file only owns the bridge plumbing. */
+   4  
+   5  import { DeviceEventEmitter, NativeModules } from 'react-native';
+   6  import type { LightSample } from './plateau';
+   7  
+   8  const { LightSensorModule } = NativeModules;
+   9  
+  10  const EVENT_NAME = 'PlantAR_LightSample';
+  11  
+  12  export interface LightSensorInfo {
+  13    sensorName: string;
+  14    maxRangeLux: number;
+  15  }
+  16  
+  17  export interface LightStream {
+  18    info: LightSensorInfo;
+  19    stop: () => void;
+  20  }
+  21  
+  22  /** Starts the native TYPE_LIGHT stream. Samples are timestamped with
+  23   *  Date.now() at arrival so the capture controller works on one clock
+  24   *  (the native boot-relative timestamp is for evaluation logs only).
+  25   *  Rejects with E_NO_LIGHT_SENSOR / E_ALREADY_RUNNING from the native side. */
+  26  export async function startLightStream(
+  27    onSample: (sample: LightSample) => void,
+  28  ): Promise<LightStream> {
+  29    const info: LightSensorInfo = await LightSensorModule.start();
+  30    const subscription = DeviceEventEmitter.addListener(
+  31      EVENT_NAME,
+  32      (event: { timestampMs: number; lux: number }) => {
+  33        onSample({ tMs: Date.now(), lux: event.lux });
+  34      },
+  35    );
+  36    return {
+  37      info,
+  38      stop: () => {
+  39        subscription.remove();
+  40        LightSensorModule.stop();
+  41      },
+  42    };
+  43  }
+
+=== FULL: src/sensor/compass.ts  (41 lines) ===
+   1  /** Thin JS wrapper around the native CompassModule (rotation-vector azimuth
+   2   *  stream). Emits MAGNETIC-north azimuth; true-north correction happens in
+   3   *  the capture flow once LocationModule provides the local declination. */
+   4  
+   5  import { DeviceEventEmitter, NativeModules } from 'react-native';
+   6  
+   7  const { CompassModule } = NativeModules;
+   8  
+   9  const EVENT_NAME = 'PlantAR_CompassSample';
+  10  
+  11  export type CompassAccuracy = 'high' | 'medium' | 'low' | 'unreliable';
+  12  
+  13  export interface CompassSample {
+  14    magneticAzimuthDeg: number;
+  15    accuracy: CompassAccuracy;
+  16    /** Degrees the phone is held away from lying flat (0 = flat, ~90 = upright,
+  17     *  as when tilted up to read the screen). The dominant real-world source of
+  18     *  heading error — see CompassModule.kt for why this is computed from the
+  19     *  rotation matrix rather than pitch/roll. */
+  20    tiltDeg: number;
+  21  }
+  22  
+  23  export interface CompassStream {
+  24    stop: () => void;
+  25  }
+  26  
+  27  export async function startCompassStream(
+  28    onSample: (sample: CompassSample) => void,
+  29  ): Promise<CompassStream> {
+  30    await CompassModule.start();
+  31    const subscription = DeviceEventEmitter.addListener(
+  32      EVENT_NAME,
+  33      (event: CompassSample) => onSample(event),
+  34    );
+  35    return {
+  36      stop: () => {
+  37        subscription.remove();
+  38        CompassModule.stop();
+  39      },
+  40    };
+  41  }

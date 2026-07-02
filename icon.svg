@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="leafGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#9DEBBE"/>
+      <stop offset="1" stop-color="#3E9E63"/>
+    </linearGradient>
+  </defs>
+
+  <!-- background -->
+  <rect width="1024" height="1024" fill="#0B1A11"/>
+
+  <!-- sun disc -->
+  <circle cx="282" cy="282" r="107" fill="#A9E8C3"/>
+
+  <!-- sun rays -->
+  <g stroke="#A9E8C3" stroke-width="46" stroke-linecap="round">
+    <line x1="282" y1="64"  x2="282" y2="128"/>
+    <line x1="64"  y1="282" x2="128" y2="282"/>
+    <line x1="118" y1="118" x2="164" y2="164"/>
+    <line x1="446" y1="118" x2="400" y2="164"/>
+    <line x1="118" y1="446" x2="164" y2="400"/>
+  </g>
+
+  <!-- leaf -->
+  <path d="M820 307 C 820 666 614 870 256 870 C 256 512 461 307 820 307 Z"
+        fill="url(#leafGrad)"/>
+
+  <!-- midrib -->
+  <path d="M358 768 C 486 614 640 461 768 384"
+        stroke="#1F5538" stroke-width="41" fill="none"
+        stroke-linecap="round" opacity="0.5"/>
+</svg>

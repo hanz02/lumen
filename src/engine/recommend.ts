@@ -6,7 +6,11 @@ import type { Plant, SpotInput, Recommendation } from './types';
 import { applyGates } from './gates';
 import { applyLuxCalibration } from './calibration';
 import { scorePlant } from './scoring';
-import { classifyBand, luxGapToMaintenance, luxGapToPreferred } from './lightFit';
+import {
+  classifyBand,
+  luxGapToMaintenance,
+  luxGapToPreferred,
+} from './lightFit';
 import {
   displayLightLabel,
   displayWarning,
@@ -56,6 +60,7 @@ function toRecommendation(
       displayWarning: null,
       recommendationConfidence: 'reduced',
       explanation: gate.reason ?? 'Eliminated by a rule gate.',
+      reference: p.reference ?? null, // display-only pass-through, never scored
     };
   }
 
@@ -79,6 +84,7 @@ function toRecommendation(
     displayWarning: displayWarning(p, scored.factors, orient),
     recommendationConfidence: recommendationConfidence(p, scored.factors),
     explanation: buildExplanation(p, spot, band, scored.factors),
+    reference: p.reference ?? null, // display-only pass-through, never scored
   };
 }
 
@@ -95,10 +101,10 @@ export function recommend(plants: Plant[], spot: SpotInput): RecommendResult {
   // calibrated value and every result carries both (luxRaw / luxUsed).
   const luxRaw = spot.lux;
   const effSpot: SpotInput = { ...spot, lux: applyLuxCalibration(luxRaw) };
-  const all = plants.map((p) => toRecommendation(p, effSpot, luxRaw));
+  const all = plants.map(p => toRecommendation(p, effSpot, luxRaw));
 
   const recommended = all
-    .filter((r) => !r.eliminated)
+    .filter(r => !r.eliminated)
     .sort(
       (a, b) =>
         b.score - a.score ||
@@ -110,7 +116,7 @@ export function recommend(plants: Plant[], spot: SpotInput): RecommendResult {
     r.rank = i + 1;
   });
 
-  const eliminated = all.filter((r) => r.eliminated);
+  const eliminated = all.filter(r => r.eliminated);
 
   return { recommended, eliminated };
 }

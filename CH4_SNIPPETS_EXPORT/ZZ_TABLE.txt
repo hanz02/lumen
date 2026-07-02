@@ -1,0 +1,56 @@
+================================================================================
+SNIPPET EXTRACTION SUMMARY  (item | result | line range pasted)
+================================================================================
+A1  FOUND                 App.tsx:102-126  (incl. WELCOME=0, not listed in brief)
+A2  FOUND                 App.tsx:455-565
+A3  FOUND                 App.tsx:215-230 (fn) + 665-705 (two call sites)
+A4  FOUND                 App.tsx:248-266 (getMeta startup) + 625-632 (eval row)
+A5  FOUND                 App.tsx:679-695 (catch) + 1118-1135 (ConfirmModal)
+B1  FOUND                 solar.ts:1-60
+B2  FOUND                 solar.ts:90-168  (280.46646 @100, 357.52911 @101, EoC @105-108)
+B3  FOUND                 solar.ts:259-335
+B4  FOUND                 solar.ts:337-344
+B5  FOUND                 solar.ts:346-372
+C1  FOUND (richer)        ARMeasurementActivity.kt:1291-1340 + 1408-1413 + 1488-1497
+C2  FOUND (see note)      ARMeasurementActivity.kt:135-146 + 1167-1209 + 1652-1663 (+1665-1672 offered)
+D1  FOUND (widened)       RecommendationList.tsx:31-105  (brief said 50-104)
+D2  FOUND                 RecommendationList.tsx:453-466
+E1  FOUND                 WindowMeasureCard.tsx:44-49
+E2  FOUND                 WindowMeasureCard.tsx:1-6 + 198-205 + 206-224
+F1  FOUND (full)          src/sensor/useCompassCapture.ts (101 lines)
+F2  FOUND (full)          src/data/plantStore.ts (35 lines)
+F3  FOUND (full)          src/sensor/lightSensor.ts (43 lines)
+F4  FOUND (full)          src/sensor/compass.ts (41 lines)
+
+No item NOT FOUND. Line counts of all source files match the brief exactly.
+
+--------------------------------------------------------------------------------
+ITEMS WHERE LOCATION/SCOPE DIFFERED FROM THE BRIEF (so a sentence stays correct):
+--------------------------------------------------------------------------------
+* D1 — WIDENED to 31-105. The brief's 50-104 captures only the bar renderer; the
+  factor labels (FACTOR_ROWS, 33-41) and barColor() (44-48) it depends on sit at
+  31-49. The walkthrough needs all of it.
+
+* C2 — The four-way hit-quality decision is SPLIT, not one block:
+    - findValidHit() (1167-1209) decides only PLANE / DEPTH / FEATURE_POINT.
+    - INSTANT_PLACEMENT is assigned on a SEPARATE instant-placement path
+      (lines 742 and 1035), never inside findValidHit.
+    - getOverallQuality() (1652-1663) then combines the two tapped points by
+      taking the LEAST reliable of the two (INSTANT_PLACEMENT > FEATURE_POINT >
+      DEPTH > PLANE), a conservative/honest choice.
+  Do NOT write "findValidHit chooses among all four" — that is false.
+
+* C1 — Richer than the brief's grep implied. The straight-line distance
+  sqrt(dx^2+dy^2+dz^2) AND the horizontal floor distance sqrt(dx^2+dz^2) (Y =
+  ARCore gravity-up, dropped) are BOTH computed, and each is taken as the MEDIAN
+  of samples over a 600 ms settle (lines 1308-1314). The app feeds the HORIZONTAL
+  value to the engine (matches the distance-zone construct). State the median +
+  horizontal detail — it is the strongest accuracy/honesty point in the AR text.
+
+* A1 — There is a WELCOME=0 step (App.tsx:102) in addition to the five the brief
+  named; the wizard is 0=Welcome,1=Spot,2=Window,3=Light,4=Facing,5=Results.
+
+* C2d (OFFERED, not requested) — confidenceLabel() (1665-1671) maps HitQuality to
+  the user-facing badge: PLANE->High, DEPTH->Medium, FEATURE_POINT->Low,
+  INSTANT_PLACEMENT->Estimated. Include it so 4.6 can show how AR confidence
+  reaches the user.

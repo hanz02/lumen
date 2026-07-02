@@ -21,6 +21,8 @@ export const EVAL_LOG_COLUMNS = [
   'ar_plane_mismatch',
   'ar_tool',
   'ar_quality',
+  'plant_distance_cm',
+  'plant_distance_source',
   'window_width_cm',
   'window_width_source',
   'window_width_quality',
@@ -40,6 +42,7 @@ export const EVAL_LOG_COLUMNS = [
   'geo_source',
   'direct_sun_hours',
   'sun_intervals',
+  'plant_lateral_offset_m',
   'top1_id',
   'top1_score',
   'top2_id',
@@ -49,8 +52,18 @@ export const EVAL_LOG_COLUMNS = [
   'recommended_count',
   'eliminated_count',
   'db_generated_at',
-  'ref_tape_cm',
-  'ref_meter_lux',
+  'capture_sun_elevation_deg',
+  'sky_condition',
+  'ref_tape_distance_cm',
+  'ref_tape_width_cm',
+  'ref_tape_height_cm',
+  'ref_tape_sill_cm',
+  'ref_meter_lux_1',
+  'ref_meter_lux_2',
+  'ref_meter_lux_3',
+  'ref_meter_lux_4',
+  'ref_meter_lux_5',
+  'ref_meter_lux_median',
   'note',
 ] as const;
 
@@ -76,6 +89,10 @@ export interface EvalRowInput {
   arPlaneMismatch?: boolean | null;
   arTool?: string | null;
   arQuality?: string | null;
+  /** Engine's effective plant→window distance (cm), whatever the source. */
+  plantDistanceCm?: number | null;
+  /** How the distance was obtained: 'ar' or 'manual' (tape fallback). */
+  plantDistanceSource?: string | null;
   /** Window size step (evaluation data, not an engine input). source is
    *  'ar' (approximate) or 'manual' (tape). */
   windowWidthCm?: number | null;
@@ -98,13 +115,39 @@ export interface EvalRowInput {
   directSunHours?: number | null;
   /** Pre-formatted "09:05–11:30; 14:00–15:25". */
   sunIntervals?: string | null;
+  /** Signed lateral plant offset from the window centre-line (m); + = right when
+   *  looking out. Feeds the spot-specific direct-sun estimate (null if unknown). */
+  plantLateralOffsetM?: number | null;
   /** Best-first, up to three used. */
   top: Array<{ id: string; score: number }>;
   recommendedCount: number;
   eliminatedCount: number;
   dbGeneratedAt?: string | null;
-  refTapeCm?: string | null;
-  refMeterLux?: string | null;
+  /** Sun elevation (deg) at the moment of the light capture — lets night/dusk
+   *  captures be filtered from the dataset (below ~3° the lux is not daylight). */
+  captureSunElevationDeg?: number | null;
+  /** User-tapped sky condition at capture (sunny / partly_cloudy / overcast /
+   *  indoor_lit) — context only, never an engine input. */
+  skyCondition?: string | null;
+  /** Tape-measured ground truth for each of the FOUR independently-fallible AR
+   *  outputs (plant distance, window width/height/sill) — kept as four
+   *  explicit fields rather than one generic "ref_tape_cm" so a single saved
+   *  row can validate all four dimensions at once, unambiguously. */
+  refTapeDistanceCm?: string | null;
+  refTapeWidthCm?: string | null;
+  refTapeHeightCm?: string | null;
+  refTapeSillCm?: string | null;
+  /** Five repeated UT383 readings, mirroring the field-collection protocol
+   *  (tools/analyze_spot_observations.py reads 5 phone + 5 meter columns per
+   *  observation) — a single instrument glance is noisier than a median of
+   *  five. refMeterLuxMedian is computed by the caller from whichever subset
+   *  was actually filled in. */
+  refMeterLux1?: string | null;
+  refMeterLux2?: string | null;
+  refMeterLux3?: string | null;
+  refMeterLux4?: string | null;
+  refMeterLux5?: string | null;
+  refMeterLuxMedian?: number | null;
   note?: string | null;
 }
 
@@ -141,6 +184,8 @@ export function buildEvalRow(r: EvalRowInput): string {
     r.arPlaneMismatch == null ? null : String(r.arPlaneMismatch),
     r.arTool,
     r.arQuality,
+    round(r.plantDistanceCm, 1),
+    r.plantDistanceSource,
     round(r.windowWidthCm, 1),
     r.windowWidthSource,
     r.windowWidthQuality,
@@ -160,6 +205,7 @@ export function buildEvalRow(r: EvalRowInput): string {
     r.geoSource,
     round(r.directSunHours, 2),
     r.sunIntervals,
+    round(r.plantLateralOffsetM, 2),
     top(0)?.id,
     round(top(0)?.score, 1),
     top(1)?.id,
@@ -169,8 +215,18 @@ export function buildEvalRow(r: EvalRowInput): string {
     r.recommendedCount,
     r.eliminatedCount,
     r.dbGeneratedAt,
-    r.refTapeCm,
-    r.refMeterLux,
+    round(r.captureSunElevationDeg, 1),
+    r.skyCondition,
+    r.refTapeDistanceCm,
+    r.refTapeWidthCm,
+    r.refTapeHeightCm,
+    r.refTapeSillCm,
+    r.refMeterLux1,
+    r.refMeterLux2,
+    r.refMeterLux3,
+    r.refMeterLux4,
+    r.refMeterLux5,
+    round(r.refMeterLuxMedian, 1),
     r.note,
   ];
   return values.map(csvField).join(',');

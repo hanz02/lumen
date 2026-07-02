@@ -81,6 +81,8 @@ type Props = {
   onToggleNoSill: (noSill: boolean) => void;
   /** reason string to skip; null to undo the skip. */
   onSkip: (reason: string | null) => void;
+  /** AR buttons greyed out — device confirmed not to support ARCore. */
+  arUnsupported?: boolean;
 };
 
 function DimRow({
@@ -88,11 +90,13 @@ function DimRow({
   dim,
   onMeasureAR,
   onManual,
+  arUnsupported = false,
 }: {
   dimKey: WindowDimKey;
   dim: WindowDim | null;
   onMeasureAR: (key: WindowDimKey) => void;
   onManual: (key: WindowDimKey, cm: number) => void;
+  arUnsupported?: boolean;
 }) {
   const [text, setText] = useState(dim != null ? String(dim.cm) : '');
 
@@ -136,13 +140,20 @@ function DimRow({
         placeholder="cm"
         placeholderTextColor={palette.textFaint}
       />
-      <TouchableOpacity
-        style={styles.arButton}
-        activeOpacity={0.82}
-        onPress={() => onMeasureAR(dimKey)}>
-        <Icon name="scan" size={16} color={palette.bg} />
-        <Text style={styles.arButtonText}>AR</Text>
-      </TouchableOpacity>
+      {arUnsupported ? (
+        <View style={styles.arButtonDisabled}>
+          <Icon name="scan" size={16} color={palette.textFaint} />
+          <Text style={styles.arButtonDisabledText}>AR</Text>
+        </View>
+      ) : (
+        <TouchableOpacity
+          style={styles.arButton}
+          activeOpacity={0.82}
+          onPress={() => onMeasureAR(dimKey)}>
+          <Icon name="scan" size={16} color={palette.bg} />
+          <Text style={styles.arButtonText}>AR</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -161,6 +172,7 @@ export default function WindowMeasureCard({
   onManual,
   onToggleNoSill,
   onSkip,
+  arUnsupported = false,
 }: Props) {
   const [showSkip, setShowSkip] = useState(false);
   const [skipText, setSkipText] = useState('');
@@ -178,11 +190,18 @@ export default function WindowMeasureCard({
         done={complete}
       />
 
-      <Text style={styles.bodyText}>
-        Tap <Text style={styles.bodyEm}>AR</Text> to measure each one, or type a
-        tape reading. AR is approximate on glass and frames — a typed value is
-        treated as tape-measured. Recorded for the evaluation dataset.
-      </Text>
+      {arUnsupported ? (
+        <Text style={styles.bodyText}>
+          AR is not available on this device — type each measurement from a tape
+          below. Recorded for the evaluation dataset.
+        </Text>
+      ) : (
+        <Text style={styles.bodyText}>
+          Tap <Text style={styles.bodyEm}>AR</Text> to measure each one, or type
+          a tape reading. AR is approximate on glass and frames — a typed value
+          is treated as tape-measured. Recorded for the evaluation dataset.
+        </Text>
+      )}
 
       {skipped ? (
         <>
@@ -208,12 +227,14 @@ export default function WindowMeasureCard({
             dim={dims.width}
             onMeasureAR={onMeasureAR}
             onManual={onManual}
+            arUnsupported={arUnsupported}
           />
           <DimRow
             dimKey="height"
             dim={dims.height}
             onMeasureAR={onMeasureAR}
             onManual={onManual}
+            arUnsupported={arUnsupported}
           />
           {noSill ? (
             <View style={styles.dimRow}>
@@ -233,6 +254,7 @@ export default function WindowMeasureCard({
                 dim={dims.sill}
                 onMeasureAR={onMeasureAR}
                 onManual={onManual}
+                arUnsupported={arUnsupported}
               />
               <Text style={styles.hintText}>
                 Sill height = floor to the bottom of the glass. For AR, snap both
@@ -301,15 +323,23 @@ export default function WindowMeasureCard({
 
           {!showSkip ? (
             <TouchableOpacity onPress={() => setShowSkip(true)}>
-              <Text style={styles.skipLink}>Can't measure this window?</Text>
+              <Text style={styles.skipLink}>
+                Can't measure this window at all?
+              </Text>
             </TouchableOpacity>
           ) : (
             <>
+              <Text style={styles.skipExplainText}>
+                Use this only when a tape measure is also impossible (e.g.
+                window is outside reach, blocked by a fixed obstruction). A
+                reflective frame only affects AR — you can still type a tape
+                reading in the fields above.
+              </Text>
               <TextInput
                 style={styles.input}
                 value={skipText}
                 onChangeText={setSkipText}
-                placeholder="why not? (e.g. reflective frame, no tracking)"
+                placeholder="why can't you measure it at all? (e.g. inaccessible, no floor access)"
                 placeholderTextColor={palette.textFaint}
               />
               <TouchableOpacity
@@ -375,7 +405,8 @@ const styles = StyleSheet.create({
   },
   dimInput: {
     ...inputBase,
-    width: 58,
+    width: 88,
+    paddingHorizontal: 10,
     textAlign: 'right',
   },
   arButton: {
@@ -390,6 +421,23 @@ const styles = StyleSheet.create({
   },
   arButtonText: {
     color: palette.bg,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  arButtonDisabled: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: palette.inset,
+    borderRadius: radii.pill,
+    height: 46,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: palette.hairline,
+  },
+  arButtonDisabledText: {
+    color: palette.textFaint,
     fontSize: 14,
     fontWeight: '900',
   },
@@ -476,6 +524,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     textDecorationLine: 'underline',
     marginTop: 4,
+  },
+  skipExplainText: {
+    color: palette.textFaint,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 8,
+    marginBottom: 6,
   },
   input: {
     ...inputBase,

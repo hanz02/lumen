@@ -1,0 +1,38 @@
+================================================================================
+DOUBT D6 — Exact app name/package as registered. "PlantARApp", "Lumen", or other?
+================================================================================
+ANSWER: THREE DIFFERENT NAMES, each correct for a different purpose. Chapter 4
+must use the RIGHT one for the right context — do not pick just one.
+
+1. DISPLAY NAME (what the user sees as the app's label/icon caption):
+   android/app/src/main/res/values/strings.xml:2
+     <string name="app_name">Lumen</string>
+   ANSWER: "Lumen" is the user-facing product name. This matches the thesis
+   branding (Lumen rebrand, per CLAUDE.md round-log).
+
+2. REACT NATIVE MAIN COMPONENT NAME (internal JS<->native registration key):
+   android/app/src/main/java/com/plantarapp/MainActivity.kt:14
+     override fun getMainComponentName(): String = "PlantARApp"
+   ANSWER: "PlantARApp" is the internal React Native component/registration
+   name — a holdover from the project's original working title, used only for
+   the JS bridge wiring, never shown to the user.
+
+3. ANDROID PACKAGE / APPLICATION ID:
+   android/app/build.gradle:80,82
+     namespace "com.plantarapp"
+     applicationId "com.plantarapp"
+   ANSWER: com.plantarapp is the package/applicationId — also a holdover from
+   the working title, used for the Android manifest/build identity, not shown to
+   the user.
+
+CORRECT USAGE FOR CHAPTER 4:
+  - When describing what the user sees / the product identity: "Lumen".
+  - When describing the Android package, build artifacts, or internal RN
+    component registration: "com.plantarapp" / "PlantARApp" respectively.
+  - Do not say the app is "called PlantARApp" to the reader of the thesis if
+    referring to the product — that name is purely internal/legacy. Do not say
+    the package is "com.lumen" — it is still com.plantarapp.
+
+VERDICT: CONFIRMED — all three values found exactly as the brief anticipated;
+none are NOT FOUND or contradictory, they are simply three different identifiers
+for three different layers (user-facing / RN bridge / Android package).

@@ -32,6 +32,15 @@ class PlantDataModule(private val reactContext: ReactApplicationContext) :
             "maintenance_lux_min", "maintenance_lux_max",
             "preferred_lux_min", "preferred_lux_max",
         )
+        // Scientific-reference enrichment (DLI / photoperiod / PPFD): loaded for
+        // display only and NEVER scored — the engine compares measured spot lux,
+        // not these. Surfaced in the recommendation card's "Light science" panel.
+        private val REF_COLS = listOf(
+            "dli_min", "dli_max",
+            "photoperiod_min", "photoperiod_max",
+            "maintenance_ppfd_min", "maintenance_ppfd_max",
+            "preferred_ppfd_min", "preferred_ppfd_max",
+        )
     }
 
     private var db: SQLiteDatabase? = null
@@ -58,7 +67,7 @@ class PlantDataModule(private val reactContext: ReactApplicationContext) :
     fun getPlants(promise: Promise) {
         try {
             val database = ensureDb()
-            val cols = TEXT_COLS + LUX_COLS
+            val cols = TEXT_COLS + LUX_COLS + REF_COLS
             val plants = Arguments.createArray()
             database.rawQuery(
                 "SELECT ${cols.joinToString(", ")} FROM plant ORDER BY plant_id", null
@@ -70,7 +79,7 @@ class PlantDataModule(private val reactContext: ReactApplicationContext) :
                         if (cursor.isNull(i)) row.putNull(col)
                         else row.putString(col, cursor.getString(i))
                     }
-                    for (col in LUX_COLS) {
+                    for (col in LUX_COLS + REF_COLS) {
                         val i = cursor.getColumnIndexOrThrow(col)
                         if (cursor.isNull(i)) row.putNull(col)
                         else row.putDouble(col, cursor.getDouble(i))

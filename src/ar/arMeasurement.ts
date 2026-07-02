@@ -49,3 +49,14 @@ export async function startARMeasurement(
 ): Promise<ARResult> {
   return ARModule.startARMeasurement(options);
 }
+
+/** Returns the ARCore availability status string (e.g. "SUPPORTED_INSTALLED",
+ *  "UNSUPPORTED_DEVICE_NOT_CAPABLE"). Call once at app startup to pre-disable
+ *  AR buttons on devices that can never run AR. */
+export async function checkARAvailability(): Promise<string> {
+  try {
+    return await ARModule.checkARAvailability();
+  } catch {
+    return 'UNKNOWN';
+  }
+}

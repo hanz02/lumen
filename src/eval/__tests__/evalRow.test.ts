@@ -23,6 +23,8 @@ const FULL: EvalRowInput = {
   arPlaneMismatch: false,
   arTool: 'PLANT_DISTANCE',
   arQuality: 'PLANE',
+  plantDistanceCm: 119.82,
+  plantDistanceSource: 'ar',
   windowWidthCm: 118.42,
   windowWidthSource: 'ar',
   windowWidthQuality: 'PLANE',
@@ -42,6 +44,9 @@ const FULL: EvalRowInput = {
   geoSource: 'last_known',
   directSunHours: 5.4167,
   sunIntervals: '07:20–12:45',
+  plantLateralOffsetM: 0.25,
+  captureSunElevationDeg: 41.73,
+  skyCondition: 'partly_cloudy',
   top: [
     { id: 'ZZ_PLANT', score: 82.46 },
     { id: 'SNAKE_PLANT', score: 77.01 },
@@ -50,8 +55,16 @@ const FULL: EvalRowInput = {
   recommendedCount: 12,
   eliminatedCount: 19,
   dbGeneratedAt: '2026-06-07T18:00:00',
-  refTapeCm: '121.5',
-  refMeterLux: '1460',
+  refTapeDistanceCm: '121.5',
+  refTapeWidthCm: '118.0',
+  refTapeHeightCm: '141.5',
+  refTapeSillCm: '91.0',
+  refMeterLux1: '1450',
+  refMeterLux2: '1460',
+  refMeterLux3: '1455',
+  refMeterLux4: '1470',
+  refMeterLux5: '1465',
+  refMeterLuxMedian: 1460,
   note: 'bedroom A with blinds half open', // comma-free: split(',') counts fields
 };
 
@@ -88,6 +101,39 @@ describe('buildEvalRow', () => {
     expect(col('ar_distance_horizontal_cm')).toBe('119.8');
     expect(col('ar_snap_spread_mm')).toBe('7.4');
     expect(col('ar_plane_mismatch')).toBe('false');
+  });
+
+  it('carries lateral offset, capture sun elevation, and sky condition', () => {
+    const row = buildEvalRow(FULL).split(',');
+    const col = (name: string) =>
+      row[EVAL_LOG_COLUMNS.indexOf(name as (typeof EVAL_LOG_COLUMNS)[number])];
+    expect(col('plant_lateral_offset_m')).toBe('0.25');
+    expect(col('capture_sun_elevation_deg')).toBe('41.7');
+    expect(col('sky_condition')).toBe('partly_cloudy');
+  });
+
+  it('carries the four tape-reference fields and the five UT383 readings + median', () => {
+    const row = buildEvalRow(FULL).split(',');
+    const col = (name: string) =>
+      row[EVAL_LOG_COLUMNS.indexOf(name as (typeof EVAL_LOG_COLUMNS)[number])];
+    expect(col('ref_tape_distance_cm')).toBe('121.5');
+    expect(col('ref_tape_width_cm')).toBe('118.0');
+    expect(col('ref_tape_height_cm')).toBe('141.5');
+    expect(col('ref_tape_sill_cm')).toBe('91.0');
+    expect(col('ref_meter_lux_1')).toBe('1450');
+    expect(col('ref_meter_lux_2')).toBe('1460');
+    expect(col('ref_meter_lux_3')).toBe('1455');
+    expect(col('ref_meter_lux_4')).toBe('1470');
+    expect(col('ref_meter_lux_5')).toBe('1465');
+    expect(col('ref_meter_lux_median')).toBe('1460');
+  });
+
+  it('carries the plant distance and its source (ar/manual)', () => {
+    const row = buildEvalRow(FULL).split(',');
+    const col = (name: string) =>
+      row[EVAL_LOG_COLUMNS.indexOf(name as (typeof EVAL_LOG_COLUMNS)[number])];
+    expect(col('plant_distance_cm')).toBe('119.8');
+    expect(col('plant_distance_source')).toBe('ar');
   });
 
   it('carries the window-size step with per-dimension source and quality', () => {
@@ -159,8 +205,12 @@ describe('EVAL_LOG_HEADER', () => {
   it('matches the column list', () => {
     expect(EVAL_LOG_HEADER.split(',').length).toBe(EVAL_LOG_COLUMNS.length);
     expect(EVAL_LOG_HEADER.startsWith('timestamp_iso,lux_raw')).toBe(true);
-    expect(EVAL_LOG_HEADER.endsWith('ref_tape_cm,ref_meter_lux,note')).toBe(
-      true,
-    );
+    expect(
+      EVAL_LOG_HEADER.endsWith(
+        'ref_tape_distance_cm,ref_tape_width_cm,ref_tape_height_cm,ref_tape_sill_cm,' +
+          'ref_meter_lux_1,ref_meter_lux_2,ref_meter_lux_3,ref_meter_lux_4,ref_meter_lux_5,' +
+          'ref_meter_lux_median,note',
+      ),
+    ).toBe(true);
   });
 });

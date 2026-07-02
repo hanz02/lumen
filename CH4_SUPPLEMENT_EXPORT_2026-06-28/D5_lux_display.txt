@@ -1,0 +1,28 @@
+================================================================================
+DOUBT D5 — Is luxRaw visible to the user on the Results screen, or only logged
+for evaluation?
+================================================================================
+ANSWER: VISIBLE to the user on the Results screen (RecommendationList.tsx), not
+just in the evaluation log.
+
+EXACT EVIDENCE — src/components/RecommendationList.tsx:459-464:
+  {any && (
+    <Text style={styles.luxLine}>
+      Scored at {any.luxUsed} lx (calibrated from {any.luxRaw} lx phone
+      reading)
+    </Text>
+  )}
+
+Header-comment confirmation (RecommendationList.tsx:3):
+  "plant its gate reason, and the raw/calibrated lux pair stays visible for [...]"
+
+CONTEXT: this line sits directly under the "Plants for this spot" header (line
+455-457), i.e. at the TOP of the results list, visible to every user every time
+they see recommendations — not buried in an expandable panel and not only in
+LightCaptureCard (Step 3) or the evaluation export.
+
+VERDICT: CONFIRMED — both luxRaw and luxUsed (calibrated) are shown together on
+the Results screen, in addition to whatever LightCaptureCard shows during capture
+and whatever evalRow.ts logs for Chapter 5. Chapter 4 should describe this as a
+deliberate "both" transparency choice visible at the point of the recommendation
+itself, not merely a capture-step or evaluation-log artifact.

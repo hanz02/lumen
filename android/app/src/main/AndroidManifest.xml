@@ -26,6 +26,18 @@
             android:name="com.google.ar.core"
             android:value="required" />
 
+        <!-- Lets EvalLogModule share the eval CSV as a real, openable text/csv
+             attachment (a content:// URI) instead of inline plain-text body. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <activity
             android:name=".ARMeasurementActivity"
             android:screenOrientation="portrait"

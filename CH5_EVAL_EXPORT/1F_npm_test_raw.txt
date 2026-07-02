@@ -1,0 +1,71 @@
+
+> PlantARApp@0.0.1 test
+> jest
+
+PASS src/engine/__tests__/calibration.test.ts
+PASS src/sensor/__tests__/plateau.test.ts
+PASS src/data/__tests__/mapPlant.test.ts
+PASS src/eval/__tests__/evalRow.test.ts
+PASS src/sensor/__tests__/circularMean.test.ts
+PASS tools/eval/engine_correctness.test.ts
+  ● Console
+
+    console.log
+      
+      [engine-correctness] 620/620 plant-spot decisions agree (0 mismatches) across 10 spots × 31 plants
+
+      at Object.log (tools/eval/engine_correctness.test.ts:192:13)
+
+PASS src/sensor/__tests__/cardinal.test.ts
+PASS src/engine/__tests__/recommend.test.ts
+PASS src/sun/__tests__/solar.test.ts
+PASS tools/eval/ivdv_evaluation.test.ts
+  ● Console
+
+    console.log
+      
+      [IV/DV eval] lux=3000 (calibrated) → A: 8 rec / 23 elim  |  B: 30 rec / 1 elim  |  C: 8 rec / 23 elim
+
+      at Object.log (tools/eval/ivdv_evaluation.test.ts:503:11)
+
+PASS __tests__/App.test.tsx
+  ● Console
+
+    console.warn
+      SafeAreaView has been deprecated and will be removed in a future release. Please use 'react-native-safe-area-context' instead. See https://github.com/AppAndFlow/react-native-safe-area-context
+
+    [0m [90m 810 |[39m     [36mreturn[39m (
+     [90m 811 |[39m       [33m<[39m[33mBackdrop[39m[33m>[39m
+    [31m[1m>[22m[39m[90m 812 |[39m         [33m<[39m[33mSafeAreaView[39m style[33m=[39m{styles[33m.[39mscreen}[33m>[39m
+     [90m     |[39m          [31m[1m^[22m[39m
+     [90m 813 |[39m           [33m<[39m[33mScrollView[39m
+     [90m 814 |[39m             contentContainerStyle[33m=[39m{styles[33m.[39mwelcomeContent}
+     [90m 815 |[39m             showsVerticalScrollIndicator[33m=[39m{[36mfalse[39m}[33m>[39m[0m
+
+      at warn (node_modules/react-native/Libraries/Utilities/warnOnce.js:27:11)
+      at Object.warnOnce [as SafeAreaView] (node_modules/react-native/index.js:101:5)
+      at SafeAreaView (App.tsx:812:10)
+      at Object.react_stack_bottom_frame (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:15670:20)
+      at renderWithHooks (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:4863:22)
+      at updateFunctionComponent (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:7018:19)
+      at beginWork (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:8499:18)
+      at runWithFiberInDEV (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:2315:13)
+      at performUnitOfWork (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:13224:22)
+      at workLoopSync (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:13068:41)
+      at renderRootSync (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:13049:11)
+      at performWorkOnRoot (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:12181:11)
+      at performWorkOnRootViaSchedulerTask (node_modules/react-test-renderer/cjs/react-test-renderer.development.js:2908:7)
+      at flushActQueue (node_modules/react/cjs/react.development.js:590:34)
+      at Object.<anonymous>.process.env.NODE_ENV.exports.act (node_modules/react/cjs/react.development.js:884:10)
+      at Object.act (__tests__/App.test.tsx:10:27)
+      at asyncGeneratorStep (node_modules/@babel/runtime/helpers/asyncToGenerator.js:3:17)
+      at _next (node_modules/@babel/runtime/helpers/asyncToGenerator.js:17:9)
+      at node_modules/@babel/runtime/helpers/asyncToGenerator.js:22:7
+      at Object.<anonymous> (node_modules/@babel/runtime/helpers/asyncToGenerator.js:14:12)
+
+
+Test Suites: 11 passed, 11 total
+Tests:       118 passed, 118 total
+Snapshots:   0 total
+Time:        2.577 s
+Ran all test suites.

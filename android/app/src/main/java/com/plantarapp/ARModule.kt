@@ -2,6 +2,7 @@ package com.plantarapp
 
 import android.app.Activity
 import android.content.Intent
+import com.google.ar.core.ArCoreApk
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.BaseActivityEventListener
 import com.facebook.react.bridge.Promise
@@ -19,6 +20,7 @@ class ARModule(private val reactContext: ReactApplicationContext) :
         private const val E_AR_ALREADY_RUNNING = "E_AR_ALREADY_RUNNING"
         private const val E_AR_CANCELLED = "E_AR_CANCELLED"
         private const val E_AR_FAILED = "E_AR_FAILED"
+        private const val E_AR_UNSUPPORTED = "E_AR_UNSUPPORTED"
     }
 
     private var measurementPromise: Promise? = null
@@ -72,6 +74,11 @@ class ARModule(private val reactContext: ReactApplicationContext) :
                         "AR Activity returned invalid measurement."
                     )
                 }
+            } else if (intent?.getBooleanExtra("ar_unsupported", false) == true) {
+                promise.reject(
+                    E_AR_UNSUPPORTED,
+                    "AR isn't supported on this device — use the tape-measurement field instead."
+                )
             } else {
                 promise.reject(
                     E_AR_CANCELLED,
@@ -87,6 +94,20 @@ class ARModule(private val reactContext: ReactApplicationContext) :
 
     override fun getName(): String {
         return "ARModule"
+    }
+
+    /** Returns the ARCore availability status string (e.g. "SUPPORTED_INSTALLED",
+     *  "UNSUPPORTED_DEVICE_NOT_CAPABLE"). Used at app startup to grey out AR
+     *  buttons before the user ever tries to launch the AR activity. */
+    @ReactMethod
+    fun checkARAvailability(promise: Promise) {
+        val activity = getCurrentActivity()
+        if (activity == null) {
+            promise.resolve("UNKNOWN")
+            return
+        }
+        val status = ArCoreApk.getInstance().checkAvailability(activity)
+        promise.resolve(status.name)
     }
 
     /** options (all optional): tool "PLANT_DISTANCE"|"WINDOW_MEASURE",

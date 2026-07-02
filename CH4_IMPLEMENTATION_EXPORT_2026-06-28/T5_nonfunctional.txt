@@ -1,0 +1,35 @@
+================================================================================
+TASK T5 — NON-FUNCTIONAL EVIDENCE (4.3.2)   [APP]
+================================================================================
+10-SECOND CAPTURE WINDOW:
+  src/sensor/useLightCapture.ts:15  export const CAPTURE_DURATION_MS = 10000;
+
+VALID LUX RANGE GUARD (validMinLux = 200):
+  src/engine/config.ts:66  validMinLux: 200,   (and validMaxLux: 6000)
+  src/engine/calibration.ts:27-29  below validMinLux the raw value is returned
+    (the intercept over-predicts at low light).
+
+PLATEAU ROBUSTNESS:
+  src/sensor/plateau.ts:38  minPlateauMs: 1000,
+  src/sensor/plateau.ts:48  minCoverage: 0.35,
+
+ARCORE AVAILABILITY CHECK + FALLBACK (graceful on unsupported devices):
+  ARModule.kt:23   private const val E_AR_UNSUPPORTED = "E_AR_UNSUPPORTED"
+  ARModule.kt:79   ... rejects the promise with E_AR_UNSUPPORTED ...
+  ARModule.kt: checkARAvailability(promise) — JS can check before launching AR.
+  ARMeasurementActivity.kt:208-209 and 224-225 — if checkAvailability() ==
+    ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE the activity shows a
+    dialog instead of a black screen (field-confirmed on a non-AR device).
+
+MISSING-INPUT WEIGHT RESCALE (renormalisation):
+  src/engine/scoring.ts:126-134 — factors with available=false are filtered out and
+  the remaining weights are renormalised (wSum), so partial captures still score.
+
+minSdkVersion:
+  android/build.gradle:4  minSdkVersion = 24   (compileSdk 36, targetSdk 36)
+
+RUNTIME SPEED / PERFORMANCE:
+  NO MEASUREMENT IN REPO. (No benchmark/timing artifact exists; do not assert a
+  latency figure. The engine is a pure synchronous function and the Results screen
+  has a deliberate ~2.4 s delight-only loading pause, RESULTS_LOADING_MS — that is a
+  UX delay, NOT a performance measurement.)

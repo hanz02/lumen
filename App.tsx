@@ -1,10 +1,18 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
+  Linking,
   SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
+  Vibration,
   View,
 } from 'react-native';
 
@@ -27,15 +35,20 @@ import {
   useLightCapture,
 } from './src/sensor/useLightCapture';
 import { useCompassCapture } from './src/sensor/useCompassCapture';
-import { getPositionWithPermission } from './src/location/location';
+import {
+  getPositionWithPermission,
+  LocationPermissionPermanentlyDeniedError,
+} from './src/location/location';
 import type { GeoFix } from './src/location/location';
 import {
   APERTURE_PARAMS,
   azimuthToAspect,
+  daylightWindow,
   DIRECT_SUN_PARAMS,
   estimateDirectSun,
   estimateDirectSunThroughAperture,
   formatSunInterval,
+  NIGHT_THRESHOLD_ELEVATION_DEG,
   solarPosition,
   sunAzimuthAtMinute,
   sunElevationAtMinute,
@@ -47,7 +60,7 @@ import {
   getEvalLogStat,
   saveEvalRow,
 } from './src/eval/evalLog';
-import { startARMeasurement } from './src/ar/arMeasurement';
+import { checkARAvailability, startARMeasurement } from './src/ar/arMeasurement';
 import type { ARResult } from './src/ar/arMeasurement';
 import WindowMeasureCard, {
   EMPTY_WINDOW_DIMS,
@@ -63,7 +76,20 @@ import LumenMark from './src/ui/LumenMark';
 import StepProgress from './src/ui/StepProgress';
 import type { Step } from './src/ui/StepProgress';
 import FadeSlideIn from './src/ui/FadeSlideIn';
+import ResultsLoadingScreen from './src/ui/ResultsLoadingScreen';
 import Toast, { useToast } from './src/ui/Toast';
+import ConfirmModal from './src/ui/ConfirmModal';
+
+/** Single vibration pulse when the 10 s light capture ends (success or
+ *  rejected) — the user is often holding the phone screen-towards-the-sun
+ *  with the back of the phone facing them, unable to watch the countdown. */
+const LIGHT_CAPTURE_END_VIBRATION_MS = 220;
+
+/** How long the delight-only loading screen stays up before Results reveals
+ *  (the recommendation engine itself is synchronous/instant — this is purely
+ *  a deliberate, short pause). Long enough for ~1 full sun+moon swing cycle
+ *  and a few status lines, short enough to never feel like real waiting. */
+const RESULTS_LOADING_MS = 2400;
 
 const WINDOW_DIM_AR_LABELS: Record<WindowDimKey, string> = {
   width: 'Window WIDTH',
@@ -91,6 +117,12 @@ const STEPS: Step[] = [
 export default function App() {
   const [step, setStep] = useState(WELCOME);
   const [distanceResult, setDistanceResult] = useState<ARResult | null>(null);
+  /** Tape/manual plant→window distance (cm) — fallback when AR can't track.
+   *  Mutually exclusive with `distanceResult` (setting one clears the other). */
+  const [manualDistanceCm, setManualDistanceCm] = useState<number | null>(null);
+  /** Signed plant position along the window width, [-1, 1] (0 = centre). Feeds
+   *  the spot-specific direct-sun estimate; default centre = original behaviour. */
+  const [plantLateralFrac, setPlantLateralFrac] = useState(0);
   const [windowDims, setWindowDims] = useState<WindowDims>(EMPTY_WINDOW_DIMS);
   const [plants, setPlants] = useState<Plant[] | null>(null);
   const [plantsError, setPlantsError] = useState<string | null>(null);
@@ -110,9 +142,99 @@ export default function App() {
   const [geoStatus, setGeoStatus] = useState<GeoStatus>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
   const [lightChecklistAcked, setLightChecklistAcked] = useState(false);
+  /** Sun elevation (deg) at the moment the light capture finished — drives the
+   *  night-results view and the eval-log night/dusk flag. Null until captured. */
+  const [captureSunElevationDeg, setCaptureSunElevationDeg] = useState<
+    number | null
+  >(null);
   const [dbMeta, setDbMeta] = useState<PlantDbMeta | null>(null);
   const [evalRowCount, setEvalRowCount] = useState(0);
   const { toast, show: showToast, hide: hideToast } = useToast();
+  /** True once we know this device cannot run ARCore — set at startup via
+   *  checkARAvailability() or whenever any AR call returns E_AR_UNSUPPORTED.
+   *  Disables + greys out AR buttons so the user goes straight to tape. */
+  const [arUnsupported, setArUnsupported] = useState(false);
+
+  // Stop a genuinely ACTIVE sensor capture when the user navigates away from
+  // its step (Home, Back, or jumping via the step rail) — without this, the
+  // native TYPE_LIGHT/compass stream keeps running in the background (the
+  // capture hooks live at App's top level and only tear down on unmount, not
+  // on a step change), so an abandoned capture either (a) silently completes
+  // off-screen and leaves a stale result waiting when the user returns, or
+  // (b) makes the NEXT "Measure" attempt fail outright with "already running"
+  // (LightSensorModule/CompassModule reject a second start() while the first
+  // is still registered) until the orphaned 10s timer eventually expires.
+  // Only an in-progress capture is aborted — a completed reading (lightState
+  // 'done'/'failed', compass 'captured') is left alone so finished work isn't
+  // wiped just by glancing at another step.
+  const prevStepRef = useRef(step);
+  useEffect(() => {
+    const prevStep = prevStepRef.current;
+    if (prevStep !== step) {
+      if (prevStep === LIGHT && lightState.phase === 'capturing') {
+        resetLightCapture();
+      }
+      if (prevStep === FACING && compassState.phase === 'reading') {
+        resetCompass();
+      }
+      prevStepRef.current = step;
+    }
+  }, [step, lightState.phase, compassState.phase, resetLightCapture, resetCompass]);
+
+  // Single vibration pulse the moment the light capture ends (phase leaves
+  // 'capturing'), success or rejected — see LIGHT_CAPTURE_END_VIBRATION_MS.
+  const prevLightPhaseRef = useRef(lightState.phase);
+  useEffect(() => {
+    const prevPhase = prevLightPhaseRef.current;
+    if (
+      prevPhase === 'capturing' &&
+      (lightState.phase === 'done' || lightState.phase === 'failed')
+    ) {
+      Vibration.vibrate(LIGHT_CAPTURE_END_VIBRATION_MS);
+    }
+    prevLightPhaseRef.current = lightState.phase;
+  }, [lightState.phase]);
+
+  // Editing the plant→window distance after light was already captured means
+  // the user is very likely now considering a different physical spot — the
+  // OLD light reading no longer describes where they're standing, so force a
+  // fresh capture (reset to idle re-locks Facing/Results via maxReachable,
+  // below). Facing isn't physically invalidated by distance the same way, but
+  // it's the one DOWNSTREAM step the sequential lock wouldn't otherwise force
+  // (it's optional) — pendingFacingRecheck nudges the user to deliberately
+  // redo or skip it rather than silently carrying stale compass data forward.
+  const [pendingFacingRecheck, setPendingFacingRecheck] = useState(false);
+  const [showFacingRecheckModal, setShowFacingRecheckModal] = useState(false);
+
+  // One-time modal when the user reaches Step 1 and AR is confirmed unsupported.
+  // Fires whether arUnsupported was set at startup (Layer 1) or flipped to true
+  // mid-session after the first AR failure (Layers 2/3). The ref guards against
+  // re-showing it on subsequent visits to Step 1 in the same session.
+  const [showArUnsupportedModal, setShowArUnsupportedModal] = useState(false);
+  const arUnsupportedModalShownRef = useRef(false);
+  useEffect(() => {
+    if (arUnsupported && step === SPOT && !arUnsupportedModalShownRef.current) {
+      arUnsupportedModalShownRef.current = true;
+      setShowArUnsupportedModal(true);
+    }
+  }, [arUnsupported, step]);
+  const invalidateDownstreamOnDistanceEdit = () => {
+    if (lightState.phase !== 'done') return;
+    resetLightCapture();
+    setLightChecklistAcked(false);
+    resetCompass();
+    setCaptureSunElevationDeg(null);
+    setPendingFacingRecheck(true);
+  };
+
+  // Once the forced light re-capture completes, prompt the user to also
+  // re-check the window facing (now actually reachable, since light is done).
+  useEffect(() => {
+    if (pendingFacingRecheck && lightState.phase === 'done') {
+      setPendingFacingRecheck(false);
+      setShowFacingRecheckModal(true);
+    }
+  }, [pendingFacingRecheck, lightState.phase]);
 
   const refreshEvalCount = useCallback(async () => {
     try {
@@ -133,6 +255,14 @@ export default function App() {
       .then(setDbMeta)
       .catch(() => {});
     refreshEvalCount();
+    // Check once at startup — devices confirmed incapable (UNSUPPORTED_DEVICE_
+    // NOT_CAPABLE) get AR buttons greyed out immediately, before the user ever
+    // taps them. Devices that return SUPPORTED_NOT_INSTALLED may still turn out
+    // to be incompatible (e.g. Redmi Note 10); those are caught by the try-catch
+    // in ARMeasurementActivity.onResume() and result in E_AR_UNSUPPORTED below.
+    checkARAvailability().then((status) => {
+      if (status === 'UNSUPPORTED_DEVICE_NOT_CAPABLE') setArUnsupported(true);
+    });
   }, [refreshEvalCount]);
 
   // One position fix per session. Requested as soon as the user reaches the
@@ -154,9 +284,12 @@ export default function App() {
       });
   }, [step, compassState.phase, geoStatus]);
 
-  // Daytime check for the spot-light step: reuses the SPA's minElevationDeg
-  // floor (the same "is the sun usefully up" threshold as the direct-sun
-  // estimate) rather than inventing a separate constant.
+  // Daytime check for the spot-light step: uses NIGHT_THRESHOLD_ELEVATION_DEG
+  // (civil twilight, -6°) — a deliberately DIFFERENT constant from the SPA's
+  // minElevationDeg (3°). That one asks "can a direct-sun beam usefully reach a
+  // window"; this one asks "is the sky still giving off meaningful ambient
+  // light" — using the sun-beam floor here would call a still-bright early
+  // evening "night" the moment the sun dips just below the horizon.
   const sunElevationNow = useMemo(() => {
     if (geo == null) return null;
     return solarPosition(Date.now(), geo.latitude, geo.longitude).elevationDeg;
@@ -165,8 +298,30 @@ export default function App() {
   const daylightStatus: DaylightStatus = useMemo(() => {
     if (geoStatus === 'failed') return 'unknown';
     if (sunElevationNow == null) return 'checking';
-    return sunElevationNow >= DIRECT_SUN_PARAMS.minElevationDeg ? 'day' : 'night';
+    return sunElevationNow >= NIGHT_THRESHOLD_ELEVATION_DEG ? 'day' : 'night';
   }, [geoStatus, sunElevationNow]);
+
+  // Snapshot the sun's elevation when the light capture completes (re-runs once a
+  // GPS fix arrives). Lets the results view switch to the night theme and the
+  // eval log flag dusk/night captures — the lux then isn't a daylight reading.
+  useEffect(() => {
+    if (lightState.phase !== 'done') {
+      if (captureSunElevationDeg !== null) setCaptureSunElevationDeg(null);
+      return;
+    }
+    if (captureSunElevationDeg == null && geo != null) {
+      setCaptureSunElevationDeg(
+        solarPosition(Date.now(), geo.latitude, geo.longitude).elevationDeg,
+      );
+    }
+  }, [lightState.phase, geo, captureSunElevationDeg]);
+
+  const capturedAtNight = useMemo(() => {
+    if (captureSunElevationDeg != null) {
+      return captureSunElevationDeg < NIGHT_THRESHOLD_ELEVATION_DEG;
+    }
+    return daylightStatus === 'night';
+  }, [captureSunElevationDeg, daylightStatus]);
 
   const aspectInfo = useMemo(() => {
     if (compassState.phase !== 'captured') return null;
@@ -183,6 +338,19 @@ export default function App() {
     };
   }, [compassState, geo]);
 
+  // The plant→window distance the engine actually uses (metres): AR horizontal
+  // when available (3D fallback), else the manual tape value. One number, one
+  // source of truth for both the recommendation and the sun aperture model.
+  const effectiveDistanceM = useMemo(() => {
+    if (distanceResult != null) {
+      return distanceResult.horizontalDistanceMeters > 0
+        ? distanceResult.horizontalDistanceMeters
+        : distanceResult.distanceMeters;
+    }
+    if (manualDistanceCm != null) return manualDistanceCm / 100;
+    return null;
+  }, [distanceResult, manualDistanceCm]);
+
   // Prefer the spot-specific aperture model when the full window geometry +
   // distance are known (width sets the azimuth cone, sill/head the vertical
   // reach); otherwise fall back to the orientation-only whole-window estimate.
@@ -192,18 +360,15 @@ export default function App() {
     const w = windowDims.width;
     const h = windowDims.height;
     const s = windowDims.sill;
-    const distM =
-      distanceResult != null
-        ? distanceResult.horizontalDistanceMeters > 0
-          ? distanceResult.horizontalDistanceMeters
-          : distanceResult.distanceMeters
-        : null;
+    const distM = effectiveDistanceM;
     if (w != null && h != null && s != null && distM != null && distM > 0) {
       const aperture = {
         widthM: w.cm / 100,
         sillM: s.cm / 100,
         topM: (s.cm + h.cm) / 100,
         distanceM: distM,
+        // signed metres from the window centre-line (+ = right looking out)
+        lateralOffsetM: (plantLateralFrac * (w.cm / 100)) / 2,
       };
       return {
         estimate: estimateDirectSunThroughAperture(
@@ -222,50 +387,63 @@ export default function App() {
       perSpot: false,
       aperture: null,
     };
-  }, [aspectInfo, geo, windowDims, distanceResult]);
+  }, [aspectInfo, geo, windowDims, effectiveDistanceM, plantLateralFrac]);
 
   const sunEstimate = sunResult?.estimate ?? null;
 
-  // Geometry for the side-view ray diagram: only when the spot-specific aperture
-  // model actually ran and some direct sun is expected. The drawn ray uses the
-  // sun's elevation at the midpoint of the longest sun interval — its most
-  // representative moment of penetration (ties the picture to a real sample).
+  // Geometry for the side/top diagrams. Drawn whenever the spot-specific aperture
+  // model ran (perSpot) — including when NO direct sun reaches the spot, so the
+  // user can still see where the sun travels (it visibly misses the window). The
+  // sweep follows the longest lit interval when there is sun, else the whole
+  // daylight span with a `noSun` flag (the views then never highlight the plant).
   const sunDiagram = useMemo(() => {
     if (sunResult == null || !sunResult.perSpot || sunResult.aperture == null) {
       return null;
     }
-    const est = sunResult.estimate;
-    if (est.hours <= 0 || est.intervals.length === 0 || geo == null) return null;
-    const longest = est.intervals.reduce((a, b) =>
-      b.endMin - b.startMin > a.endMin - a.startMin ? b : a,
-    );
-    const midMin = (longest.startMin + longest.endMin) / 2;
     const winAz = aspectInfo?.trueAzimuthDeg;
-    if (winAz == null) return null;
-    const { widthM, sillM, topM, distanceM } = sunResult.aperture;
+    if (winAz == null || geo == null) return null;
+    const est = sunResult.estimate;
+    const { widthM, sillM, topM, distanceM, lateralOffsetM } = sunResult.aperture;
     const now = new Date();
     const el = (m: number) =>
       sunElevationAtMinute(now, geo.latitude, geo.longitude, m);
     const az = (m: number) =>
       sunAzimuthAtMinute(now, geo.latitude, geo.longitude, m);
+
+    // Choose the span to draw: the longest lit interval, or — when no direct sun
+    // reaches the spot — the whole daylight window so the path is still shown.
+    let span: { startMin: number; endMin: number };
+    let noSun: boolean;
+    if (est.hours > 0 && est.intervals.length > 0) {
+      span = est.intervals.reduce((a, b) =>
+        b.endMin - b.startMin > a.endMin - a.startMin ? b : a,
+      );
+      noSun = false;
+    } else {
+      const dw = daylightWindow(now, geo.latitude, geo.longitude);
+      if (dw == null) return null; // sun never rises today — nothing to draw
+      span = dw;
+      noSun = true;
+    }
+    const midMin = (span.startMin + span.endMin) / 2;
     return {
       widthM,
       sillM,
       topM,
       distanceM,
+      lateralOffsetM,
       plantTopM: APERTURE_PARAMS.assumedPlantTopM,
       windowAzimuthDeg: winAz,
-      // representative ray + the interval's endpoints, so the side view can sweep
-      // the sun's elevation and the top view can sweep its azimuth over the time
-      // the spot is actually lit. intervalMinutes lets the top view scale its
-      // bright span to the true duration (a shorter window → shorter bright sweep).
-      intervalMinutes: longest.endMin - longest.startMin,
+      // representative ray + the span's endpoints, so the side view can sweep the
+      // sun's elevation and the top view can sweep its azimuth over the drawn span.
+      intervalMinutes: span.endMin - span.startMin,
       elevationDeg: el(midMin),
-      elevationStartDeg: el(longest.startMin),
-      elevationEndDeg: el(longest.endMin),
-      sunAzStartDeg: az(longest.startMin),
-      sunAzEndDeg: az(longest.endMin),
-      peakLabel: formatSunInterval(longest),
+      elevationStartDeg: el(span.startMin),
+      elevationEndDeg: el(span.endMin),
+      sunAzStartDeg: az(span.startMin),
+      sunAzEndDeg: az(span.endMin),
+      peakLabel: formatSunInterval(span),
+      noSun,
     };
   }, [sunResult, geo, aspectInfo]);
 
@@ -280,7 +458,7 @@ export default function App() {
 
   const windowDone = windowStepComplete(windowDims);
   const lightDone = lightState.phase === 'done';
-  const distanceDone = distanceResult != null;
+  const distanceDone = distanceResult != null || manualDistanceCm != null;
 
   // Recommendations are gated on the full capture protocol: plant-spot
   // distance + window size (or logged skip) + lux. Window size is recorded
@@ -291,12 +469,9 @@ export default function App() {
     }
     return recommend(plants, {
       lux: lightState.reading.lux, // RAW — the engine calibrates ("both" mode)
-      // horizontal component: tape protocol measures along the floor, and the
-      // distance-zone construct (Ch 2.5) is horizontal distance from window
-      distanceToWindowM:
-        distanceResult.horizontalDistanceMeters > 0
-          ? distanceResult.horizontalDistanceMeters
-          : distanceResult.distanceMeters,
+      // horizontal AR distance (3D fallback) or the manual tape value; the
+      // distance-zone construct (Ch 2.5) is horizontal distance from the window
+      distanceToWindowM: effectiveDistanceM,
       windowAspect: aspectInfo != null ? aspectInfo.aspect : null,
       directSunHours: sunEstimate != null ? sunEstimate.hours : null,
     });
@@ -306,10 +481,46 @@ export default function App() {
     distanceDone,
     windowDone,
     lightState,
-    distanceResult,
+    effectiveDistanceM,
     aspectInfo,
     sunEstimate,
   ]);
+
+  // Brief delight-only loading screen on every ARRIVAL at Results from a
+  // different step, but ONLY when the underlying recommendation actually
+  // needs recomputing — recommendations is itself a useMemo over the real
+  // engine inputs, so an unchanged object reference means nothing that feeds
+  // the engine changed since it was last shown (e.g. pressing "See
+  // recommendations" a second time after just looking at Facing again).
+  const [resultsRevealed, setResultsRevealed] = useState(false);
+  const prevStepForResultsRef = useRef(step);
+  const lastShownRecommendationsRef = useRef<typeof recommendations>(undefined);
+  useEffect(() => {
+    const prevStep = prevStepForResultsRef.current;
+    if (prevStep !== step) {
+      if (step === RESULTS && prevStep !== RESULTS) {
+        const stale = recommendations !== lastShownRecommendationsRef.current;
+        lastShownRecommendationsRef.current = recommendations;
+        if (stale) {
+          setResultsRevealed(false);
+          const id = setTimeout(() => setResultsRevealed(true), RESULTS_LOADING_MS);
+          prevStepForResultsRef.current = step;
+          return () => clearTimeout(id);
+        }
+        setResultsRevealed(true);
+      }
+      prevStepForResultsRef.current = step;
+    }
+    return undefined;
+  }, [step, recommendations]);
+
+  // A deliberate, manually-triggered recompute pause (e.g. after retrying a
+  // failed GPS fix from the Results screen) — same delight pause as a normal
+  // arrival, without requiring an actual step change to fire it.
+  const triggerResultsRecompute = useCallback(() => {
+    setResultsRevealed(false);
+    setTimeout(() => setResultsRevealed(true), RESULTS_LOADING_MS);
+  }, []);
 
   const inputsLine = useMemo(() => {
     if (recommendations == null) return null;
@@ -379,6 +590,11 @@ export default function App() {
         arPlaneMismatch: distanceResult?.planeMismatch ?? null,
         arTool: distanceResult?.measurementTool ?? null,
         arQuality: distanceResult?.overallQuality ?? null,
+        plantDistanceCm:
+          effectiveDistanceM != null
+            ? Math.round(effectiveDistanceM * 1000) / 10
+            : null,
+        plantDistanceSource: distanceResult != null ? 'ar' : 'manual',
         windowWidthCm: windowDims.width?.cm ?? null,
         windowWidthSource: windowDims.width?.source ?? null,
         windowWidthQuality: windowDims.width?.quality ?? null,
@@ -401,14 +617,28 @@ export default function App() {
           sunEstimate != null
             ? sunEstimate.intervals.map(formatSunInterval).join('; ')
             : null,
+        plantLateralOffsetM:
+          windowDims.width != null
+            ? (plantLateralFrac * (windowDims.width.cm / 100)) / 2
+            : null,
         top: recommendations.recommended
           .slice(0, 3)
           .map((r) => ({ id: r.plant_id, score: r.score })),
         recommendedCount: recommendations.recommended.length,
         eliminatedCount: recommendations.eliminated.length,
         dbGeneratedAt: dbMeta?.generated_at ?? null,
-        refTapeCm: refs.tapeCm || null,
-        refMeterLux: refs.meterLux || null,
+        captureSunElevationDeg,
+        skyCondition: refs.skyCondition || null,
+        refTapeDistanceCm: refs.tapeDistanceCm || null,
+        refTapeWidthCm: refs.tapeWidthCm || null,
+        refTapeHeightCm: refs.tapeHeightCm || null,
+        refTapeSillCm: refs.tapeSillCm || null,
+        refMeterLux1: refs.meterLux1 || null,
+        refMeterLux2: refs.meterLux2 || null,
+        refMeterLux3: refs.meterLux3 || null,
+        refMeterLux4: refs.meterLux4 || null,
+        refMeterLux5: refs.meterLux5 || null,
+        refMeterLuxMedian: refs.meterLuxMedian,
         note: refs.note || null,
       });
       await saveEvalRow(row);
@@ -418,11 +648,14 @@ export default function App() {
       lightState,
       recommendations,
       distanceResult,
+      effectiveDistanceM,
       windowDims,
       aspectInfo,
       geo,
       sunEstimate,
       dbMeta,
+      plantLateralFrac,
+      captureSunElevationDeg,
       refreshEvalCount,
     ],
   );
@@ -440,14 +673,33 @@ export default function App() {
         label: 'Plant spot distance',
       });
       if (measurement.measurementTool !== 'PLANT_DISTANCE') return; // safety
+      invalidateDownstreamOnDistanceEdit();
       setDistanceResult(measurement);
+      setManualDistanceCm(null); // AR wins; clear any prior manual value
     } catch (error: any) {
-      showToast({
-        title: 'Measurement cancelled',
-        message: error?.message ?? 'Please try again.',
-        variant: 'info',
-      });
+      if (error?.code === 'E_AR_UNSUPPORTED') {
+        setArUnsupported(true);
+        showToast({
+          title: 'AR not supported on this device',
+          message: 'Use the tape-measurement fields instead.',
+          variant: 'info',
+        });
+      } else {
+        showToast({
+          title: 'Measurement cancelled',
+          message: error?.message ?? 'Please try again.',
+          variant: 'info',
+        });
+      }
     }
+  };
+
+  // Tape fallback for the plant→window distance (when AR can't track). Setting a
+  // manual value clears the AR result so exactly one source is active.
+  const setManualDistance = (cm: number) => {
+    invalidateDownstreamOnDistanceEdit();
+    setManualDistanceCm(cm);
+    setDistanceResult(null);
   };
 
   const measureWindowDim = async (key: WindowDimKey) => {
@@ -469,11 +721,20 @@ export default function App() {
         },
       }));
     } catch (error: any) {
-      showToast({
-        title: 'Measurement cancelled',
-        message: error?.message ?? 'Please try again.',
-        variant: 'info',
-      });
+      if (error?.code === 'E_AR_UNSUPPORTED') {
+        setArUnsupported(true);
+        showToast({
+          title: 'AR not supported on this device',
+          message: 'Use the tape-measurement fields instead.',
+          variant: 'info',
+        });
+      } else {
+        showToast({
+          title: 'Measurement cancelled',
+          message: error?.message ?? 'Please try again.',
+          variant: 'info',
+        });
+      }
     }
   };
 
@@ -501,11 +762,48 @@ export default function App() {
 
   const startOver = () => {
     setDistanceResult(null);
+    setManualDistanceCm(null);
+    setPlantLateralFrac(0);
     setWindowDims(EMPTY_WINDOW_DIMS);
     resetLightCapture();
+    setLightChecklistAcked(false);
     resetCompass();
+    setCaptureSunElevationDeg(null);
+    setPendingFacingRecheck(false);
+    setShowFacingRecheckModal(false);
+    lastShownRecommendationsRef.current = undefined;
     setStep(SPOT);
   };
+
+  // Retry a failed GPS fix — granting the permission doesn't guarantee a fix
+  // (common indoors); the one-shot effect above never retries on its own
+  // once geoStatus is set, so this is the only way out of a stuck 'failed'.
+  // onSuccess fires only when the fix actually succeeds — callers that also
+  // need to trigger the results-loading animation pass triggerResultsRecompute
+  // here so the animation doesn't play on a denial or indoor miss.
+  // When the permission was permanently denied ("never ask again"), the OS
+  // won't show a dialog; we open App Settings instead so the user can grant.
+  const retryGeo = useCallback((onSuccess?: () => void) => {
+    setGeoError(null);
+    setGeoStatus('pending');
+    getPositionWithPermission()
+      .then((fix) => {
+        setGeo(fix);
+        setGeoStatus('ok');
+        onSuccess?.();
+      })
+      .catch((error: any) => {
+        if (error instanceof LocationPermissionPermanentlyDeniedError) {
+          Linking.openSettings();
+        }
+        setGeoError(error?.message ?? 'No position fix.');
+        setGeoStatus('failed');
+      });
+  }, []);
+
+  const hasAnyProgress =
+    distanceDone || windowDone || lightDone || compassState.phase === 'captured';
+  const [showExitConfirm, setShowExitConfirm] = useState(false);
 
   // ---- Welcome -----------------------------------------------------------
   if (step === WELCOME) {
@@ -556,7 +854,7 @@ export default function App() {
             <GradientButton
               title="Begin"
               icon="arrowRight"
-              onPress={() => setStep(SPOT)}
+              onPress={startOver}
               style={styles.beginButton}
             />
             <Text style={styles.welcomeFootnote}>
@@ -606,6 +904,11 @@ export default function App() {
               <SpotDistanceCard
                 result={distanceResult}
                 onMeasure={measureDistance}
+                manualDistanceCm={manualDistanceCm}
+                onManual={setManualDistance}
+                lateralFrac={plantLateralFrac}
+                onLateralChange={setPlantLateralFrac}
+                arUnsupported={arUnsupported}
               />
             </FadeSlideIn>
           )}
@@ -618,6 +921,7 @@ export default function App() {
                 onManual={setManualWindowDim}
                 onToggleNoSill={setWindowNoSill}
                 onSkip={setWindowSkip}
+                arUnsupported={arUnsupported}
               />
             </FadeSlideIn>
           )}
@@ -629,6 +933,7 @@ export default function App() {
                 durationMs={CAPTURE_DURATION_MS}
                 onStart={startLightCapture}
                 onReset={resetLightCapture}
+                capturedAtNight={capturedAtNight}
               />
             </FadeSlideIn>
           )}
@@ -658,17 +963,21 @@ export default function App() {
                 geoStatus={geoStatus}
                 geoError={geoError}
                 sunSummary={sunSummary}
+                onRetryLocation={retryGeo}
               />
             </FadeSlideIn>
           )}
 
-          {step === RESULTS && (
+          {step === RESULTS && !resultsRevealed && <ResultsLoadingScreen />}
+
+          {step === RESULTS && resultsRevealed && (
             <>
               {recommendations != null && (
                 <FadeSlideIn style={styles.sunCardWrap}>
                   <RecommendationList
                     result={recommendations}
                     inputsLine={inputsLine}
+                    capturedAtNight={capturedAtNight}
                   />
                 </FadeSlideIn>
               )}
@@ -690,6 +999,7 @@ export default function App() {
                     intervalLabels={sunEstimate.intervals.map(formatSunInterval)}
                     perSpot={sunResult?.perSpot ?? false}
                     diagram={sunDiagram}
+                    capturedAtNight={capturedAtNight}
                   />
                 ) : (
                   <View style={styles.sunPromptCard}>
@@ -703,7 +1013,7 @@ export default function App() {
                       {compassState.phase !== 'captured'
                         ? 'Capture the window facing to estimate when direct sun reaches this spot.'
                         : geoStatus === 'failed'
-                        ? 'A GPS fix is needed for the sun estimate, but none was available. Re-capture the window facing with location on.'
+                        ? 'A GPS fix is needed for the sun estimate, but none was available. Grant location access and retry.'
                         : 'Getting your position for the sun estimate…'}
                     </Text>
                     {compassState.phase !== 'captured' && (
@@ -711,6 +1021,14 @@ export default function App() {
                         title="Capture window facing"
                         icon="compass"
                         onPress={() => setStep(FACING)}
+                        style={styles.sunPromptButton}
+                      />
+                    )}
+                    {compassState.phase === 'captured' && geoStatus === 'failed' && (
+                      <GradientButton
+                        title="Grant location & retry"
+                        icon="compass"
+                        onPress={() => retryGeo(triggerResultsRecompute)}
                         style={styles.sunPromptButton}
                       />
                     )}
@@ -740,18 +1058,26 @@ export default function App() {
           <TouchableOpacity
             style={styles.backButton}
             activeOpacity={0.75}
-            onPress={() => setStep(step === SPOT ? WELCOME : step - 1)}>
+            onPress={() => {
+              if (step === SPOT && hasAnyProgress) {
+                setShowExitConfirm(true);
+                return;
+              }
+              setStep(step === SPOT ? WELCOME : step - 1);
+            }}>
             <Icon name="arrowLeft" size={18} color={palette.mint} />
             <Text style={styles.backText}>Back</Text>
           </TouchableOpacity>
 
           {step === RESULTS ? (
-            <GradientButton
-              title="New spot"
-              icon="pin"
-              onPress={startOver}
-              style={styles.footerCta}
-            />
+            resultsRevealed && (
+              <GradientButton
+                title="New spot"
+                icon="pin"
+                onPress={startOver}
+                style={styles.footerCta}
+              />
+            )
           ) : (
             <GradientButton
               title={step === FACING ? 'See recommendations' : 'Continue'}
@@ -763,6 +1089,47 @@ export default function App() {
           )}
         </View>
       </SafeAreaView>
+
+      <ConfirmModal
+        visible={showExitConfirm}
+        icon="alert"
+        destructive
+        title="Leave this spot?"
+        message="Going back to the home screen clears everything measured for this spot — distance, window size, light, and facing."
+        confirmLabel="Leave"
+        cancelLabel="Stay"
+        onConfirm={() => {
+          setShowExitConfirm(false);
+          setStep(WELCOME);
+        }}
+        onCancel={() => setShowExitConfirm(false)}
+      />
+
+      <ConfirmModal
+        visible={showFacingRecheckModal}
+        icon="compass"
+        hideCancel
+        title="Re-check the window facing"
+        message="The plant's distance changed, so this is effectively a new spot. Please re-check the window facing for an accurate sun estimate — or skip it from that screen if you'd rather not."
+        confirmLabel="OK"
+        onConfirm={() => {
+          setShowFacingRecheckModal(false);
+          setStep(FACING);
+        }}
+        onCancel={() => setShowFacingRecheckModal(false)}
+      />
+
+      <ConfirmModal
+        visible={showArUnsupportedModal}
+        icon="alert"
+        hideCancel
+        title="AR not available on this device"
+        message="This device doesn't support ARCore, so the AR measurement buttons are disabled. Use the tape-measure fields to enter the plant-to-window distance and window dimensions manually — everything else in the app works normally."
+        confirmLabel="Got it, I'll use tape"
+        onConfirm={() => setShowArUnsupportedModal(false)}
+        onCancel={() => setShowArUnsupportedModal(false)}
+      />
+
       <Toast toast={toast} onHide={hideToast} />
     </Backdrop>
   );

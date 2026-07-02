@@ -17,8 +17,18 @@ const SMOOTHING_WINDOW = 12;
 
 export type CompassCaptureState =
   | { phase: 'idle' }
-  | { phase: 'reading'; azimuthDeg: number | null; accuracy: CompassAccuracy }
-  | { phase: 'captured'; magneticAzimuthDeg: number; accuracy: CompassAccuracy }
+  | {
+      phase: 'reading';
+      azimuthDeg: number | null;
+      accuracy: CompassAccuracy;
+      tiltDeg: number | null;
+    }
+  | {
+      phase: 'captured';
+      magneticAzimuthDeg: number;
+      accuracy: CompassAccuracy;
+      tiltDeg: number;
+    }
   | { phase: 'failed'; reason: string };
 
 /** Circular mean of bearings in degrees (a plain average breaks at the
@@ -58,9 +68,10 @@ export function useCompassCapture() {
           phase: 'reading',
           azimuthDeg: circularMeanDeg(buf.map((s) => s.magneticAzimuthDeg)),
           accuracy: sample.accuracy,
+          tiltDeg: sample.tiltDeg,
         });
       });
-      setState({ phase: 'reading', azimuthDeg: null, accuracy: 'low' });
+      setState({ phase: 'reading', azimuthDeg: null, accuracy: 'low', tiltDeg: null });
     } catch (error: any) {
       setState({
         phase: 'failed',
@@ -77,6 +88,7 @@ export function useCompassCapture() {
       phase: 'captured',
       magneticAzimuthDeg: circularMeanDeg(buf.map((s) => s.magneticAzimuthDeg)),
       accuracy: buf[buf.length - 1].accuracy,
+      tiltDeg: buf[buf.length - 1].tiltDeg,
     });
   }, [cleanup]);
 

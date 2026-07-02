@@ -1,0 +1,17 @@
+  console.log
+    
+    [engine-correctness] 620/620 plant-spot decisions agree (0 mismatches) across 10 spots × 31 plants
+
+      at Object.log (tools/eval/engine_correctness.test.ts:192:13)
+
+PASS tools/eval/engine_correctness.test.ts
+  Engine vs evidence — rule-application correctness
+    √ every gate decision matches the evidence-derived expectation (2 ms)
+    √ every light band matches the evidence-derived expectation
+    √ writes the engine-correctness report (1 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       3 passed, 3 total
+Snapshots:   0 total
+Time:        0.443 s, estimated 1 s
+Ran all test suites matching /tools\\eval\\engine_correctness.test.ts/i.

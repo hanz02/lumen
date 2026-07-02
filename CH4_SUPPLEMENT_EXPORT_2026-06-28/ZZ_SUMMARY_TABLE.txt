@@ -1,0 +1,41 @@
+================================================================================
+SECTION 6 — SUMMARY TABLE
+================================================================================
+| Item | Verdict          | Note (if anything other than a clean match)                          |
+|------|------------------|------------------------------------------------------------------------|
+| FA   | CONFIRMED        | All 5 claims MATCH exactly (66 lines, floor 0.6, ceiling penalty 0.7,  |
+|      |                  | preferred=1.0, 4 LightBand values MATCH types.ts).                     |
+| FB   | CONFIRMED        | 7 of 8 claims MATCH exactly. Claim G is DIFFERENT FROM THE BRIEF'S      |
+|      |                  | IMPLICIT ASSUMPTION: declination->true-north is NOT in solar.ts at     |
+|      |                  | all — it's in LocationModule.kt (native, computes declination) +       |
+|      |                  | App.tsx:330 (applies it). solar.ts only consumes an already-true       |
+|      |                  | azimuth. Not a contradiction of any prior brief, just a location fix.  |
+| FC   | CONFIRMED**      | Tilt threshold MATCH (30°, named TILT_WARNING_DEG). Sector claim is     |
+|      |                  | DIFFERENT FROM THE BRIEF'S BINARY "8 or 4" FRAMING: cardinalName() is   |
+|      |                  | 8-sector, cardinalAbbr() is 16-sector (neither function is 4-sector;    |
+|      |                  | the 4-sector N/E/S/W classification is a SEPARATE function,             |
+|      |                  | azimuthToAspect(), in solar.ts, not in cardinal.ts).                    |
+| D1   | CONFIRMED (YES)  | Real, working cascade — invalidateDownstreamOnDistanceEdit(), called    |
+|      |                  | from both the AR and manual-tape distance paths.                       |
+| D2   | CONFIRMED (BOTH) | Proactive: greys out buttons + one-time ConfirmModal at startup if      |
+|      |                  | device confirmed incapable. Reactive: Toast (+ the same modal, once     |
+|      |                  | per session if not already shown) on a live E_AR_UNSUPPORTED failure.  |
+| D3   | CONFIRMED (NO    | No separate windowSkipped flag — a single OR predicate                 |
+|      |  separate flag)  | (windowStepComplete) treats "all 3 dims present" OR "skipReason set"   |
+|      |                  | as equally TRUE. Skipping DOES unlock the light step.                  |
+| D4   | CONFIRMED (YES)  | available=false -> filtered from terms -> excluded from wSum ->        |
+|      |                  | remaining weights proportionally rescaled. User sees 'reduced'          |
+|      |                  | confidence label (explain.ts:67-75), not a score penalty.              |
+| D5   | CONFIRMED        | Visible on Results screen itself (RecommendationList.tsx:459-464),     |
+|      |  (YES, Results)  | not only during capture or in the eval log.                            |
+| D6   | CONFIRMED        | Three distinct identifiers, all correct for their own layer:           |
+|      |  (3 names)       | app_name="Lumen" (user-facing), getMainComponentName()="PlantARApp"    |
+|      |                  | (RN bridge), applicationId/namespace="com.plantarapp" (Android pkg).   |
+
+** No item is a true MISMATCH (a wrong number). FB-G, FC-B, and D3/D6 are cases
+where the brief's phrasing assumed a simpler shape than what the code actually
+does — flagged as DIFFERENT/nuance so Chapter 4 states the precise mechanism
+rather than the simplified assumption.
+
+NO ITEM RETURNED "NOT FOUND". All three critical/nice-to-have files exist at
+their expected line counts (66 / 423 / 56) with zero discrepancy.

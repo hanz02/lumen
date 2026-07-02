@@ -2,6 +2,7 @@ import {
   DIRECT_SUN_PARAMS,
   angularDiffDeg,
   azimuthToAspect,
+  daylightWindow,
   estimateDirectSun,
   estimateDirectSunThroughAperture,
   formatSunInterval,
@@ -162,6 +163,76 @@ describe('estimateDirectSunThroughAperture — window geometry effects', () => {
     const est = ap({});
     const minutes = est.intervals.reduce((s, iv) => s + (iv.endMin - iv.startMin), 0);
     expect(minutes / 60).toBeCloseTo(est.hours, 5);
+  });
+});
+
+describe('estimateDirectSunThroughAperture — lateral plant position', () => {
+  // South window at 40°N on the equinox: the sun sweeps east → due south → west,
+  // so a centred plant is lit around solar noon and an off-centre plant is lit
+  // earlier or later. A moderate cone (1 m wide, 1 m back) makes the shift clear.
+  const EQ = new Date(2026, 2, 20, 12, 0, 0);
+  const S = { lat: 40, lon: 0, az: 180 };
+  const base = { widthM: 1.0, sillM: 0.6, topM: 2.0, distanceM: 1.0 };
+  const ap = (over: Partial<typeof base> & { lateralOffsetM?: number }) =>
+    estimateDirectSunThroughAperture(EQ, S.lat, S.lon, S.az, { ...base, ...over });
+  const midMin = (e: { intervals: Array<{ startMin: number; endMin: number }> }) =>
+    e.intervals.length
+      ? (e.intervals[0].startMin + e.intervals[e.intervals.length - 1].endMin) / 2
+      : NaN;
+
+  it('lateralOffsetM = 0 reproduces the centre-line baseline exactly', () => {
+    const baseEst = ap({});
+    const zero = ap({ lateralOffsetM: 0 });
+    expect(zero.hours).toBe(baseEst.hours);
+    expect(zero.intervals).toEqual(baseEst.intervals);
+  });
+
+  it('a lateral offset changes when (or how long) the spot is lit', () => {
+    const centre = ap({});
+    const shifted = ap({ lateralOffsetM: 0.5 });
+    const changed =
+      shifted.hours !== centre.hours ||
+      (shifted.intervals[0]?.startMin ?? -1) !==
+        (centre.intervals[0]?.startMin ?? -1);
+    expect(changed).toBe(true);
+  });
+
+  it('opposite lateral offsets are lit at different times of day', () => {
+    const right = ap({ lateralOffsetM: 0.6 });
+    const left = ap({ lateralOffsetM: -0.6 });
+    expect(right.hours).toBeGreaterThan(0);
+    expect(left.hours).toBeGreaterThan(0);
+    expect(midMin(right)).not.toBe(midMin(left));
+  });
+});
+
+describe('daylightWindow', () => {
+  // Pick a longitude that puts solar noon at the test runner's LOCAL noon, so the
+  // daylight span is a contiguous midday block (it would otherwise wrap past local
+  // midnight when the runner's timezone and the longitude disagree). In the real
+  // app the captured GPS longitude always matches the device timezone, so daylight
+  // is naturally contiguous. utcMin0 = UTC minute-of-day at local midnight; solar
+  // noon lands at local noon when lon = -utcMin0/4.
+  const utcMin0 = ((new Date().getTimezoneOffset() % 1440) + 1440) % 1440;
+  let tzLon = -utcMin0 / 4;
+  if (tzLon <= -180) tzLon += 360;
+
+  it('brackets a long summer day at 40°N (sun up 10–20 h, not all day)', () => {
+    const dw = daylightWindow(new Date(2026, 5, 21, 0, 0, 0), 40, tzLon);
+    expect(dw).not.toBeNull();
+    expect(dw!.startMin).toBeLessThan(dw!.endMin);
+    const hours = (dw!.endMin - dw!.startMin) / 60;
+    expect(hours).toBeGreaterThan(10);
+    expect(hours).toBeLessThan(20);
+  });
+
+  it('the midpoint of the span is above the elevation floor', () => {
+    const day = new Date(2026, 2, 20, 0, 0, 0);
+    const dw = daylightWindow(day, 40, tzLon)!;
+    const mid = Math.round((dw.startMin + dw.endMin) / 2);
+    expect(sunElevationAtMinute(day, 40, tzLon, mid)).toBeGreaterThanOrEqual(
+      DIRECT_SUN_PARAMS.minElevationDeg,
+    );
   });
 });
 

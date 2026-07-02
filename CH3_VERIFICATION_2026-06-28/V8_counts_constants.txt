@@ -1,0 +1,33 @@
+================================================================================
+V8 — SUPPORTING COUNTS AND CONSTANTS
+================================================================================
+
+DATASET COUNTS — android/app/src/main/assets/plant_db.sqlite (RAW sqlite query):
+  SELECT count(*) FROM plant     -> 31    Chapter says 31    MATCH
+  SELECT count(*) FROM evidence  -> 171   Chapter says 171   MATCH
+  SELECT count(*) FROM lookup    -> 70    Chapter says 70    MATCH
+  (tables present: meta, plant, evidence, lookup; meta has 8 rows)
+
+CONSTANTS (each MATCH against the chapter):
+  Calibration slope      1.1054   src/engine/config.ts:62   MATCH
+  Calibration intercept  134.4    src/engine/config.ts:63   MATCH
+  Valid lux floor        200      src/engine/config.ts:66 (validMinLux:200)  MATCH
+  Plateau min duration   1000 ms  src/sensor/plateau.ts:38 (minPlateauMs:1000)  MATCH
+  Plateau min coverage   0.35     src/sensor/plateau.ts:48 (minCoverage:0.35)  MATCH
+  Capture window         10 s     src/sensor/useLightCapture.ts:15 (CAPTURE_DURATION_MS=10000)  MATCH
+  Scoring weights        0.30/0.25/0.25/0.20   src/engine/config.ts:13-18
+                         light .3 / directSun .25 / distance .25 / confidence .2  MATCH
+  Distance matrix        1.0/0.7/0.4   src/engine/scoring.ts:79-81
+                         near  {high 1.0, medium 0.7, low 0.4}
+                         mid   {high 0.7, medium 1.0, low 0.7}
+                         deep  {high 0.4, medium 0.7, low 1.0}   MATCH
+  Confidence weights     1.0/0.70/0.45   src/engine/config.ts:36-41
+                         high 1.0 / medium 0.7 / low 0.45 (+ provisional 0.3)  MATCH
+  Sun beam floor         3 deg    src/sun/solar.ts:51 (minElevationDeg:3)  MATCH
+  Civil twilight         -6 deg   src/sun/solar.ts:45 (NIGHT_THRESHOLD_ELEVATION_DEG=-6)  MATCH
+
+EXTRA verified prose number:
+  AR activity line count "about 1,774 lines" (Chapter para [77])
+  wc -l ARMeasurementActivity.kt -> 1774   MATCH exactly
+  (Note: CLAUDE.md still says "~1,100+ lines" — that doc is stale; the chapter's
+   1,774 is the correct current figure.)

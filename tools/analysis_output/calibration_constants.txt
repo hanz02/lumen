@@ -1,4 +1,4 @@
-Generated 2026-06-11 by analyze_spot_observations.py
+Generated 2026-06-21 by analyze_spot_observations.py
 Calibration: meter_lux = slope * phone_lux + intercept
 
 ALL rows (n=210):
@@ -6,6 +6,17 @@ ALL rows (n=210):
 
 SENSITIVITY — 5-reading rows only (n=176):
   slope=1.1057  intercept=136.3  R2=0.9936  r=0.9968
+
+SESSION 5-FOLD CROSS-VALIDATION (held-out, refit per fold):
+  In validated range (phone>=200 lx, n_test=183):
+    MAE=267.5 lux  RMSE=383.1 lux  MAPE=15.07%
+  All rows incl. sub-200 lx (n_test=210):
+    MAE=245.5 lux  RMSE=368.3 lux  MAPE=38.36%
+  (MAPE is inflated below the valid range, where a small lux error is a
+  large %, which is exactly why the app returns raw lux there.)
+  Validates the calibration generalises beyond its fitting set. The
+  SHIPPED constants stay the ALL-rows fit above; this is a separate,
+  reported validation number (see calibration_crossval.csv per fold).
 
 Use the ALL-rows constants in src/engine/config.ts LUX_CALIBRATION.
 Device-specific (Samsung S21+), valid ~200-6000 lx indoor daylight.

@@ -1,0 +1,35 @@
+================================================================================
+V2 — TEST SUITE: 118 TESTS ACROSS 11 SUITES   (Chapter 3 claim)
+================================================================================
+RESULT: MATCH (118 tests / 11 suites) AND tsc clean.
+
+--------------------------------------------------------------------------------
+npm test  (RAW Jest summary line):
+--------------------------------------------------------------------------------
+Test Suites: 11 passed, 11 total
+Tests:       118 passed, 118 total
+Snapshots:   0 total
+Time:        2.474 s
+
+--------------------------------------------------------------------------------
+npx tsc --noEmit  ->  tsc exit: 0   (no type errors)
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+The 11 test files ("suites"), RAW:
+--------------------------------------------------------------------------------
+./src/data/__tests__/mapPlant.test.ts
+./src/engine/__tests__/calibration.test.ts
+./src/engine/__tests__/recommend.test.ts
+./src/eval/__tests__/evalRow.test.ts
+./src/sensor/__tests__/cardinal.test.ts
+./src/sensor/__tests__/circularMean.test.ts
+./src/sensor/__tests__/plateau.test.ts
+./src/sun/__tests__/solar.test.ts
+./tools/eval/engine_correctness.test.ts
+./tools/eval/ivdv_evaluation.test.ts
+./__tests__/App.test.tsx
+(count = 11)
+
+TOOL IDENTIFIED: Jest (TypeScript via ts-jest/babel) + React Test Renderer for App.test.tsx.
+This is a real, runnable automated test suite — not "AI did it".

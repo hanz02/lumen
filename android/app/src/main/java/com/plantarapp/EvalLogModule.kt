@@ -1,6 +1,7 @@
 package com.plantarapp
 
 import android.content.Intent
+import androidx.core.content.FileProvider
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -11,10 +12,12 @@ import java.io.File
 /**
  * Append-only CSV evaluation log (Ch 4 data capture: AR-vs-tape pairs,
  * phone-vs-UT383 lux pairs, recommendation snapshots). Lives in filesDir so
- * it survives app restarts; exported via the Android share sheet as text so
- * it lands in email/OneDrive without any storage permissions or providers.
- * Row construction/escaping happens in JS (src/eval/evalLog.ts) — this module
- * only owns bytes and the share intent.
+ * it survives app restarts; exported via the Android share sheet as a real
+ * text/csv attachment (a content:// URI via FileProvider — see
+ * res/xml/file_paths.xml + the <provider> in AndroidManifest.xml), so the
+ * recipient gets an actual .csv file, not inline plain text in the message
+ * body. Row construction/escaping happens in JS (src/eval/evalLog.ts) — this
+ * module only owns bytes and the share intent.
  */
 class EvalLogModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
@@ -76,8 +79,9 @@ class EvalLogModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
-    /** Opens the share sheet with the whole CSV as text (subject carries the
-     *  intended filename for mail clients). */
+    /** Opens the share sheet with the whole CSV as a real text/csv ATTACHMENT
+     *  (a content:// URI via FileProvider), so it opens correctly in Sheets /
+     *  Excel and lands in email as a proper .csv file, not raw inline text. */
     @ReactMethod
     fun share(promise: Promise) {
         try {
@@ -91,10 +95,16 @@ class EvalLogModule(private val reactContext: ReactApplicationContext) :
                 promise.reject(E_NO_ACTIVITY, "No foreground activity to share from.")
                 return
             }
+            val uri = FileProvider.getUriForFile(
+                reactContext,
+                "${reactContext.packageName}.fileprovider",
+                f
+            )
             val send = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
+                type = "text/csv"
                 putExtra(Intent.EXTRA_SUBJECT, FILE_NAME)
-                putExtra(Intent.EXTRA_TEXT, f.readText())
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             activity.startActivity(Intent.createChooser(send, "Export evaluation log"))
             promise.resolve(null)

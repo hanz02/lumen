@@ -30,6 +30,20 @@ export interface SolarPosition {
   equationOfTimeMin: number;
 }
 
+/**
+ * Ambient-darkness threshold for the UI's "is it night?" warning — DELIBERATELY
+ * separate from DIRECT_SUN_PARAMS.minElevationDeg below. That constant answers a
+ * narrow physics question ("can a useful direct-sun BEAM reach a window"), so 3°
+ * is correct for it. "Is the sky still giving off meaningful ambient light" is a
+ * different question, answered by civil twilight (sun 6° below the horizon) —
+ * the standard astronomical definition of when outdoor reading-light fades and
+ * artificial lighting starts to dominate (Meeus; US Naval Observatory). Using
+ * the 3° floor for this purpose would flag a still-bright early-evening sky as
+ * "night" the moment the sun dips just below the horizon, well before it
+ * actually gets dark.
+ */
+export const NIGHT_THRESHOLD_ELEVATION_DEG = -6;
+
 /** Direct-sun geometry thresholds — methodology constants (defend in Ch 3). */
 export const DIRECT_SUN_PARAMS = {
   /** Sun must clear this elevation: below ~3° it is almost always blocked by
@@ -64,6 +78,13 @@ function clamp1(x: number): number {
 export function angularDiffDeg(a: number, b: number): number {
   const d = Math.abs(norm360(a) - norm360(b));
   return d > 180 ? 360 - d : d;
+}
+
+/** Signed smallest angular difference a − b, wrapped to (−180, 180]. Positive
+ *  means a is clockwise of b (e.g. the sun is to the +azimuth / right-hand side
+ *  of the window normal as seen looking outward). */
+export function signedAngularDiffDeg(a: number, b: number): number {
+  return ((((a - b) % 360) + 540) % 360) - 180;
 }
 
 /** Solar position for a UTC instant (epoch ms) at lat (°, +N) / lon (°, +E). */
@@ -227,6 +248,12 @@ export interface ApertureGeometry {
   distanceM: number;
   /** Plant-top height above the floor (m); defaults to assumedPlantTopM. */
   plantTopM?: number;
+  /** Signed lateral offset of the plant from the window centre-line (m), measured
+   *  along the window's width axis. + = plant to the RIGHT of centre when looking
+   *  outward through the window; default 0 = on the centre-line (original model).
+   *  Shifts the azimuth opening so an off-centre plant is lit at different times
+   *  (and usually for less of the day) than a centred one. */
+  lateralOffsetM?: number;
 }
 
 /**
@@ -254,7 +281,13 @@ export function estimateDirectSunThroughAperture(
 
   const d = Math.max(0.05, aperture.distanceM);
   const plantTopM = aperture.plantTopM ?? assumedPlantTopM;
-  const halfAngleDeg = toDeg(Math.atan(aperture.widthM / 2 / d)) + azMarginDeg;
+  // Window edges as SIGNED bearing deviations from the window normal, as seen
+  // from the (possibly off-centre) plant. With lateralOffset x, the two edges
+  // are atan((±W/2 − x)/d); when x = 0 they reduce to ∓atan(W/2/d), i.e. the
+  // original symmetric ±halfAngle cone (so the default stays unchanged).
+  const x = aperture.lateralOffsetM ?? 0;
+  const rightEdgeDeg = toDeg(Math.atan((aperture.widthM / 2 - x) / d)) + azMarginDeg;
+  const leftEdgeDeg = toDeg(Math.atan((-aperture.widthM / 2 - x) / d)) - azMarginDeg;
 
   const y = dateLocal.getFullYear();
   const mo = dateLocal.getMonth();
@@ -269,10 +302,15 @@ export function estimateDirectSunThroughAperture(
     const pos = solarPosition(t, latDeg, lonDeg);
 
     let hit = false;
+    const dev = signedAngularDiffDeg(pos.azimuthDeg, windowAzimuthTrueDeg);
     if (
       pos.elevationDeg >= minElevationDeg &&
-      angularDiffDeg(pos.azimuthDeg, windowAzimuthTrueDeg) <= halfAngleDeg
+      dev >= leftEdgeDeg &&
+      dev <= rightEdgeDeg
     ) {
+      // Vertical (penetration) test uses the perpendicular distance d only; the
+      // lateral offset deliberately does not refine the slant here (the change is
+      // below the existing ±vertMargin, so applying it would be false precision).
       const tanA = Math.tan(toRad(pos.elevationDeg));
       const bandLow = aperture.sillM - d * tanA; // sill-ray height at the spot
       const bandHigh = aperture.topM - d * tanA; // head-ray height at the spot
@@ -303,6 +341,34 @@ export function azimuthToAspect(trueAzimuthDeg: number): WindowAspect {
   if (az < 135) return 'east_facing';
   if (az < 225) return 'south_facing';
   return 'west_facing';
+}
+
+/**
+ * First and last minute-of-day at which the sun clears the direct-sun elevation
+ * floor — i.e. the usable daylight span for `dateLocal`'s calendar day. Returned
+ * so the UI can draw the sun's whole path (and show it MISSING the window) even
+ * when no direct sun reaches a spot. Null if the sun never clears the floor.
+ * Pure; unit-tested alongside the other day helpers.
+ */
+export function daylightWindow(
+  dateLocal: Date,
+  latDeg: number,
+  lonDeg: number,
+): SunInterval | null {
+  const { minElevationDeg, sampleStepMin } = DIRECT_SUN_PARAMS;
+  const y = dateLocal.getFullYear();
+  const mo = dateLocal.getMonth();
+  const day = dateLocal.getDate();
+  let startMin = -1;
+  let endMin = -1;
+  for (let min = 0; min < 1440; min += sampleStepMin) {
+    const t = new Date(y, mo, day, 0, min).getTime();
+    if (solarPosition(t, latDeg, lonDeg).elevationDeg >= minElevationDeg) {
+      if (startMin < 0) startMin = min;
+      endMin = min + sampleStepMin;
+    }
+  }
+  return startMin < 0 ? null : { startMin, endMin };
 }
 
 /** "09:05–11:30" style label for a sun interval (local time). */

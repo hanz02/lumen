@@ -1,0 +1,798 @@
+################################################################################
+# ENGINE CORE — COMPLETE BUNDLE (all 9 files of src/engine/, full, current)
+# This is the authoritative, consolidated copy of the recommendation engine —
+# the thesis centerpiece. Supersedes the scattered earlier engine exports.
+# Pipeline order: config -> types -> calibration -> lightFit -> gates ->
+#                 scoring -> explain -> recommend -> index (public barrel)
+################################################################################
+
+================================================================================
+FILE: src/engine/config.ts   (69 lines)
+================================================================================
+   1  /**
+   2   * Engine tuning constants — kept in one place because every value here is a
+   3   * design decision that must be stated and defended in the Methodology chapter.
+   4   *
+   5   * Gate policy: "lux floor + direct-sun only" (most academically defensible).
+   6   * Window orientation is a SCORING/explanation factor, never a hard gate, so the
+   7   * engine never silently rejects a plant whose measured spot lux is adequate.
+   8   */
+   9  
+  10  import type { Confidence } from './types';
+  11  
+  12  /** Weighted-scoring split across the four thesis factors (Balanced profile). */
+  13  export const WEIGHTS = {
+  14    light: 0.3, // measured spot lux vs the plant's maintenance/preferred bands
+  15    directSun: 0.25, // SPA direct-sun estimate vs the plant's direct_sun_tolerance
+  16    distance: 0.25, // spot-to-window distance zone vs the plant's light class
+  17    confidence: 0.2, // evidence confidence behind the plant's thresholds
+  18  } as const;
+  19  
+  20  /** Distance-from-window zone boundaries (metres). */
+  21  export const DISTANCE_ZONES = {
+  22    nearMaxM: 1.0, // <= 1.0 m  -> "near"
+  23    midMaxM: 2.5, // <= 2.5 m  -> "mid"; beyond -> "deep"
+  24  } as const;
+  25  
+  26  /**
+  27   * Plant light-class boundaries by maintenance_lux_min (lux).
+  28   * ~800 lux ≈ 75 fc, ~5000 lux ≈ 465 fc — coarse low/medium/high banding.
+  29   */
+  30  export const LIGHT_CLASS = {
+  31    lowMaxLux: 800,
+  32    mediumMaxLux: 5000,
+  33  } as const;
+  34  
+  35  /** Maps the controlled-vocab confidence code to a [0,1] sub-score. */
+  36  export const CONFIDENCE_SCORE: Record<Confidence, number> = {
+  37    high: 1.0,
+  38    medium: 0.7,
+  39    low: 0.45,
+  40    provisional: 0.3,
+  41  };
+  42  
+  43  /** Direct sun is considered "present" at a spot at/above this many hours/day. */
+  44  export const DIRECT_SUN_HOURS_THRESHOLD = 1.0;
+  45  
+  46  /** A 'some'-tolerance plant is comfortable up to this much direct sun (hours/day). */
+  47  export const SOME_TOLERANCE_HOURS_OK = 3.0;
+  48  
+  49  /**
+  50   * Phone-lux -> reference-lux calibration (meter = slope * phone + intercept).
+  51   *
+  52   * Derived from the 210-pair field validation (Samsung S21+ vs UNI-T UT383,
+  53   * Apr–May 2026; r=0.996, R²=0.993; phone underreads ~15% median). Constants are
+  54   * regenerated ONLY by tools/analyze_spot_observations.py (single source of
+  55   * truth) — do not hand-tune. Device-specific and validated for ~200–6000 lx
+  56   * indoor daylight; outside that range it extrapolates.
+  57   *
+  58   * "Both" mode: SpotInput.lux stays RAW; the engine applies this at scoring
+  59   * time and every Recommendation carries both luxRaw and luxUsed.
+  60   */
+  61  export const LUX_CALIBRATION = {
+  62    slope: 1.1054,
+  63    intercept: 134.4,
+  64    enabled: true,
+  65    /** Below this the linear intercept extrapolates wildly (validated range start). */
+  66    validMinLux: 200,
+  67    validMaxLux: 6000,
+  68    source: '210-pair UT383 validation Apr–May 2026 (S21+; r=0.996, R²=0.993)',
+  69  } as const;
+
+================================================================================
+FILE: src/engine/types.ts   (117 lines)
+================================================================================
+   1  /** Shared engine types. Plant fields mirror the PLANT_MASTER columns the
+   2   *  recommender actually consumes (a subset of the 27-column reference row). */
+   3  
+   4  export type Confidence = 'high' | 'medium' | 'low' | 'provisional';
+   5  
+   6  export type DirectSunTolerance = 'none' | 'some' | 'tolerant' | 'unknown';
+   7  
+   8  export type WindowAspect =
+   9    | 'north_facing'
+  10    | 'east_facing'
+  11    | 'south_facing'
+  12    | 'west_facing';
+  13  
+  14  /**
+  15   * Display-only scientific enrichment for one plant (DLI / photoperiod / PPFD).
+  16   * These are NEVER measured at runtime and NEVER enter scoring — the engine
+  17   * compares measured spot lux only (CLAUDE.md §1, §12). They are surfaced as a
+  18   * labelled "reference" panel so the recommendation can show species-specific
+  19   * plant-science context. All fields null when the plant has no such evidence.
+  20   */
+  21  export interface PlantReference {
+  22    /** Daily Light Integral range (mol·m⁻²·day⁻¹). */
+  23    dliMin: number | null;
+  24    dliMax: number | null;
+  25    /** Suitable daily light-hours range (photoperiod, hours). */
+  26    photoperiodMin: number | null;
+  27    photoperiodMax: number | null;
+  28    /** Photosynthetic Photon Flux Density range (µmol·m⁻²·s⁻¹). */
+  29    maintenancePpfdMin: number | null;
+  30    maintenancePpfdMax: number | null;
+  31    preferredPpfdMin: number | null;
+  32    preferredPpfdMax: number | null;
+  33  }
+  34  
+  35  /** One plant's runtime-relevant reference data (from the bundled SQLite `plant`). */
+  36  export interface Plant {
+  37    plant_id: string;
+  38    scientific_name_accepted: string;
+  39    common_name_main: string;
+  40    family?: string | null;
+  41    maintenance_lux_min: number | null;
+  42    maintenance_lux_max: number | null;
+  43    preferred_lux_min: number | null;
+  44    preferred_lux_max: number | null;
+  45    /** ';'-joined LOOKUP_SHADE_CATEGORY codes. */
+  46    shade_category?: string | null;
+  47    /** ';'-joined LOOKUP_ASPECT_ORIENTATION codes (N/E/S/W facing). */
+  48    aspect_orientation?: string | null;
+  49    direct_sun_tolerance: DirectSunTolerance;
+  50    final_confidence: Confidence;
+  51    value_status?: string | null;
+  52    /** Display-only scientific enrichment — never scored. Null when unavailable. */
+  53    reference?: PlantReference | null;
+  54  }
+  55  
+  56  /** The captured spot context. `lux` is required; the rest fill in as the
+  57   *  capture flow progresses (AR distance, then SPA/compass). */
+  58  export interface SpotInput {
+  59    /** Measured spot illuminance (lux) — the runtime measurement unit. */
+  60    lux: number;
+  61    /** AR plant-to-window distance (metres). */
+  62    distanceToWindowM?: number | null;
+  63    /** Window-facing aspect from the compass. */
+  64    windowAspect?: WindowAspect | null;
+  65    /** SPA-estimated direct-sun duration reaching the spot (hours/day). */
+  66    directSunHours?: number | null;
+  67    /** Observed direct sun at capture time, if known. */
+  68    directSunPresent?: boolean | null;
+  69  }
+  70  
+  71  export type LightBand = 'below_survival' | 'survival' | 'preferred' | 'excess';
+  72  
+  73  export type DistanceZone = 'near' | 'mid' | 'deep';
+  74  
+  75  /** A single weighted-scoring factor. `available=false` factors are dropped
+  76   *  from the weighted sum (and the remaining weights renormalised) so missing
+  77   *  inputs never silently penalise a plant. */
+  78  export interface FactorScore {
+  79    value: number; // [0,1]
+  80    available: boolean;
+  81    note: string; // human-readable basis, used by the explanation generator
+  82  }
+  83  
+  84  export interface RecommendationFactors {
+  85    light: FactorScore;
+  86    directSun: FactorScore;
+  87    distance: FactorScore;
+  88    confidence: FactorScore;
+  89  }
+  90  
+  91  /** Engine output for one plant against one spot. Field names align with the
+  92   *  DERIVED_APP_FIELDS runtime schema so results persist cleanly to SQLite. */
+  93  export interface Recommendation {
+  94    plant_id: string;
+  95    common_name: string;
+  96    eliminated: boolean;
+  97    gateReason: string | null;
+  98    score: number; // 0..100 (0 when eliminated)
+  99    rank: number | null; // 1-based among survivors; null if eliminated
+ 100    /** Raw phone-sensor lux as captured ("both" mode keeps it for evaluation logs). */
+ 101    luxRaw: number;
+ 102    /** Lux the engine actually scored with (calibrated when LUX_CALIBRATION.enabled). */
+ 103    luxUsed: number;
+ 104    lightBand: LightBand;
+ 105    distanceZone: DistanceZone | null;
+ 106    factors: RecommendationFactors;
+ 107    luxGapToMaintenance: number | null;
+ 108    luxGapToPreferred: number | null;
+ 109    orientationMatch: 'match' | 'mismatch' | 'unknown';
+ 110    displayLightLabel: string;
+ 111    displayWarning: string | null;
+ 112    recommendationConfidence: Confidence | 'reduced';
+ 113    explanation: string;
+ 114    /** Display-only plant-science enrichment (DLI/photoperiod/PPFD), passed
+ 115     *  straight through from the plant — never affects score, band, or gates. */
+ 116    reference?: PlantReference | null;
+ 117  }
+
+================================================================================
+FILE: src/engine/calibration.ts   (31 lines)
+================================================================================
+   1  /** Phone-lux calibration ("both" mode): raw sensor lux in, reference-equivalent
+   2   *  lux out. Pure so the on/off paths are unit-testable; constants live in
+   3   *  config.ts and are regenerated only by tools/analyze_spot_observations.py. */
+   4  
+   5  import { LUX_CALIBRATION } from './config';
+   6  
+   7  export interface LuxCalibration {
+   8    slope: number;
+   9    intercept: number;
+  10    enabled: boolean;
+  11    /** Lower bound of the validated range; below this the intercept extrapolates unreliably. */
+  12    validMinLux?: number;
+  13    validMaxLux?: number;
+  14  }
+  15  
+  16  /** Returns the lux value the engine should score with. Identity when the
+  17   *  calibration is disabled. Outside the validated range (200–6000 lx) the
+  18   *  large intercept over-predicts at low light, so the raw value is returned
+  19   *  instead — reported as-is, not calibrated. */
+  20  export function applyLuxCalibration(
+  21    rawLux: number,
+  22    cal: LuxCalibration = LUX_CALIBRATION,
+  23  ): number {
+  24    if (!cal.enabled) {
+  25      return rawLux;
+  26    }
+  27    if (cal.validMinLux != null && rawLux < cal.validMinLux) {
+  28      return Math.round(rawLux);
+  29    }
+  30    return Math.max(0, Math.round(cal.slope * rawLux + cal.intercept));
+  31  }
+
+================================================================================
+FILE: src/engine/lightFit.ts   (66 lines)
+================================================================================
+   1  /** Light-suitability logic: classify the measured lux against a plant's
+   2   *  (often one-sided) maintenance/preferred bands, and turn it into a [0,1]
+   3   *  sub-score. Handles the sparse-threshold reality of the dataset, where many
+   4   *  plants have only a maintenance floor and/or only a preferred ceiling. */
+   5  
+   6  import type { Plant, LightBand } from './types';
+   7  
+   8  /**
+   9   * The lux at which a plant moves from merely surviving to thriving. Prefer an
+  10   * explicit preferred floor; otherwise fall back to the next-best published
+  11   * anchor so we never invent a number the dataset does not contain.
+  12   */
+  13  export function preferredFloor(p: Plant): number | null {
+  14    return p.preferred_lux_min ?? p.maintenance_lux_max ?? p.preferred_lux_max ?? null;
+  15  }
+  16  
+  17  export function classifyBand(lux: number, p: Plant): LightBand {
+  18    const floor = p.maintenance_lux_min;
+  19    if (floor != null && lux < floor) {
+  20      return 'below_survival';
+  21    }
+  22    const ceil = p.preferred_lux_max;
+  23    if (ceil != null && lux > ceil) {
+  24      return 'excess';
+  25    }
+  26    const good = preferredFloor(p);
+  27    if (good != null && lux >= good) {
+  28      return 'preferred';
+  29    }
+  30    return 'survival';
+  31  }
+  32  
+  33  /**
+  34   * [0,1] light-fit sub-score:
+  35   *   - below survival floor          -> 0    (also hard-gated elsewhere)
+  36   *   - above preferred ceiling       -> 0.7  (bright excess; possible stress)
+  37   *   - within/above preferred range  -> 1.0
+  38   *   - between floor and "good"      -> ramps 0.6 -> 1.0
+  39   */
+  40  export function lightFitScore(lux: number, p: Plant): number {
+  41    const floor = p.maintenance_lux_min;
+  42    if (floor != null && lux < floor) {
+  43      return 0;
+  44    }
+  45    const ceil = p.preferred_lux_max;
+  46    if (ceil != null && lux > ceil) {
+  47      return 0.7;
+  48    }
+  49    const good = preferredFloor(p);
+  50    if (floor == null || good == null || good <= floor) {
+  51      return 1.0;
+  52    }
+  53    if (lux >= good) {
+  54      return 1.0;
+  55    }
+  56    return 0.6 + 0.4 * ((lux - floor) / (good - floor));
+  57  }
+  58  
+  59  export function luxGapToMaintenance(lux: number, p: Plant): number | null {
+  60    return p.maintenance_lux_min == null ? null : Math.round(lux - p.maintenance_lux_min);
+  61  }
+  62  
+  63  export function luxGapToPreferred(lux: number, p: Plant): number | null {
+  64    const good = preferredFloor(p);
+  65    return good == null ? null : Math.round(lux - good);
+  66  }
+
+================================================================================
+FILE: src/engine/gates.ts   (47 lines)
+================================================================================
+   1  /** Rule GATES — hard fails that eliminate clearly unsuitable plants before
+   2   *  scoring (CLAUDE.md §2.4). Policy: lux floor + direct-sun only. Orientation
+   3   *  is deliberately NOT a gate (it is a scoring factor) so the engine never
+   4   *  rejects a plant whose measured spot lux is adequate. */
+   5  
+   6  import type { Plant, SpotInput } from './types';
+   7  import { DIRECT_SUN_HOURS_THRESHOLD } from './config';
+   8  
+   9  /** Does the spot receive meaningful direct sun (observed, or SPA-estimated)? */
+  10  export function spotHasDirectSun(spot: SpotInput): boolean {
+  11    if (spot.directSunPresent === true) {
+  12      return true;
+  13    }
+  14    if (spot.directSunHours != null && spot.directSunHours >= DIRECT_SUN_HOURS_THRESHOLD) {
+  15      return true;
+  16    }
+  17    return false;
+  18  }
+  19  
+  20  export interface GateResult {
+  21    eliminated: boolean;
+  22    reason: string | null;
+  23  }
+  24  
+  25  export function applyGates(p: Plant, spot: SpotInput): GateResult {
+  26    // GATE 1 — survival light floor: below maintenance_lux_min the plant cannot
+  27    // be kept alive at this spot, by the floor's own definition.
+  28    if (p.maintenance_lux_min != null && spot.lux < p.maintenance_lux_min) {
+  29      return {
+  30        eliminated: true,
+  31        reason:
+  32          `Measured light (${Math.round(spot.lux)} lux) is below ` +
+  33          `${p.common_name_main}'s survival minimum (${Math.round(p.maintenance_lux_min)} lux).`,
+  34      };
+  35    }
+  36  
+  37    // GATE 2 — direct-sun incompatibility: a no-tolerance plant in a spot that
+  38    // receives direct sun will scorch (per-plant sourced direct_sun_tolerance).
+  39    if (p.direct_sun_tolerance === 'none' && spotHasDirectSun(spot)) {
+  40      return {
+  41        eliminated: true,
+  42        reason: `This spot receives direct sun, which scorches ${p.common_name_main} (no direct-sun tolerance).`,
+  43      };
+  44    }
+  45  
+  46    return { eliminated: false, reason: null };
+  47  }
+
+================================================================================
+FILE: src/engine/scoring.ts   (141 lines)
+================================================================================
+   1  /** Weighted SCORING of the plants that survive the gates. Four thesis factors
+   2   *  (light fit, direct-sun risk, distance/zone fit, evidence confidence) each
+   3   *  yield a [0,1] sub-score; unavailable factors are dropped and the remaining
+   4   *  weights renormalised, so partial captures (e.g. lux only, no SPA yet) still
+   5   *  produce an honest score. */
+   6  
+   7  import type { Plant, SpotInput, FactorScore, DistanceZone, RecommendationFactors } from './types';
+   8  import {
+   9    WEIGHTS,
+  10    DISTANCE_ZONES,
+  11    LIGHT_CLASS,
+  12    CONFIDENCE_SCORE,
+  13    SOME_TOLERANCE_HOURS_OK,
+  14  } from './config';
+  15  import { lightFitScore } from './lightFit';
+  16  import { spotHasDirectSun } from './gates';
+  17  
+  18  export function distanceZone(distanceM: number): DistanceZone {
+  19    if (distanceM <= DISTANCE_ZONES.nearMaxM) {
+  20      return 'near';
+  21    }
+  22    if (distanceM <= DISTANCE_ZONES.midMaxM) {
+  23      return 'mid';
+  24    }
+  25    return 'deep';
+  26  }
+  27  
+  28  export function plantLightClass(p: Plant): 'low' | 'medium' | 'high' {
+  29    const m = p.maintenance_lux_min ?? 0;
+  30    if (m < LIGHT_CLASS.lowMaxLux) {
+  31      return 'low';
+  32    }
+  33    if (m < LIGHT_CLASS.mediumMaxLux) {
+  34      return 'medium';
+  35    }
+  36    return 'high';
+  37  }
+  38  
+  39  function lightFactor(spot: SpotInput, p: Plant): FactorScore {
+  40    return {
+  41      value: lightFitScore(spot.lux, p),
+  42      available: true, // lux is always captured
+  43      note: `Measured ${Math.round(spot.lux)} lux vs this plant's light band.`,
+  44    };
+  45  }
+  46  
+  47  function directSunFactor(spot: SpotInput, p: Plant): FactorScore {
+  48    const known = spot.directSunPresent != null || spot.directSunHours != null;
+  49    if (!known) {
+  50      return { value: 0, available: false, note: 'No sun-path estimate captured.' };
+  51    }
+  52    const has = spotHasDirectSun(spot);
+  53    const t = p.direct_sun_tolerance;
+  54  
+  55    if (t === 'tolerant') {
+  56      return { value: 1.0, available: true, note: 'Tolerates direct sun.' };
+  57    }
+  58    if (t === 'some') {
+  59      const hrs = spot.directSunHours ?? (has ? SOME_TOLERANCE_HOURS_OK + 1 : 0);
+  60      const ok = !has || hrs <= SOME_TOLERANCE_HOURS_OK;
+  61      return {
+  62        value: ok ? 1.0 : 0.6,
+  63        available: true,
+  64        note: ok
+  65          ? 'Tolerates the limited direct sun at this spot.'
+  66          : 'Direct sun here may exceed its limited tolerance.',
+  67      };
+  68    }
+  69    if (t === 'none') {
+  70      return has
+  71        ? { value: 0.2, available: true, note: 'Direct sun present; risk of leaf scorch.' }
+  72        : { value: 1.0, available: true, note: 'No direct sun reaches this spot.' };
+  73    }
+  74    // unknown
+  75    return { value: 0.6, available: true, note: 'Direct-sun tolerance unknown; treated cautiously.' };
+  76  }
+  77  
+  78  const ZONE_CLASS_FIT: Record<DistanceZone, Record<'low' | 'medium' | 'high', number>> = {
+  79    near: { high: 1.0, medium: 0.7, low: 0.4 },
+  80    mid: { high: 0.7, medium: 1.0, low: 0.7 },
+  81    deep: { high: 0.4, medium: 0.7, low: 1.0 },
+  82  };
+  83  
+  84  /** Plain-language name for each distance band (used in the recommendation "why"). */
+  85  const ZONE_WORDS: Record<DistanceZone, string> = {
+  86    near: 'a close-up spot',
+  87    mid: 'a mid-distance spot',
+  88    deep: 'a spot well back from the window',
+  89  };
+  90  
+  91  function distanceFactor(spot: SpotInput, p: Plant): FactorScore {
+  92    if (spot.distanceToWindowM == null) {
+  93      return { value: 0, available: false, note: 'No window distance measured.' };
+  94    }
+  95    const zone = distanceZone(spot.distanceToWindowM);
+  96    const cls = plantLightClass(p);
+  97    return {
+  98      value: ZONE_CLASS_FIT[zone][cls],
+  99      available: true,
+ 100      note: `That is ${ZONE_WORDS[zone]} for a ${cls}-light plant.`,
+ 101    };
+ 102  }
+ 103  
+ 104  function confidenceFactor(p: Plant): FactorScore {
+ 105    return {
+ 106      value: CONFIDENCE_SCORE[p.final_confidence] ?? CONFIDENCE_SCORE.low,
+ 107      available: true,
+ 108      note: `Evidence confidence: ${p.final_confidence}.`,
+ 109    };
+ 110  }
+ 111  
+ 112  export interface ScoreResult {
+ 113    factors: RecommendationFactors;
+ 114    score: number; // 0..100
+ 115    distanceZone: DistanceZone | null;
+ 116  }
+ 117  
+ 118  export function scorePlant(p: Plant, spot: SpotInput): ScoreResult {
+ 119    const factors: RecommendationFactors = {
+ 120      light: lightFactor(spot, p),
+ 121      directSun: directSunFactor(spot, p),
+ 122      distance: distanceFactor(spot, p),
+ 123      confidence: confidenceFactor(p),
+ 124    };
+ 125  
+ 126    const terms = [
+ 127      { f: factors.light, w: WEIGHTS.light },
+ 128      { f: factors.directSun, w: WEIGHTS.directSun },
+ 129      { f: factors.distance, w: WEIGHTS.distance },
+ 130      { f: factors.confidence, w: WEIGHTS.confidence },
+ 131    ].filter((t) => t.f.available);
+ 132  
+ 133    const wSum = terms.reduce((s, t) => s + t.w, 0);
+ 134    const raw = wSum > 0 ? terms.reduce((s, t) => s + t.w * t.f.value, 0) / wSum : 0;
+ 135  
+ 136    return {
+ 137      factors,
+ 138      score: Math.round(raw * 1000) / 10, // one decimal, 0..100
+ 139      distanceZone: spot.distanceToWindowM == null ? null : distanceZone(spot.distanceToWindowM),
+ 140    };
+ 141  }
+
+================================================================================
+FILE: src/engine/explain.ts   (156 lines)
+================================================================================
+   1  /** Explanation generator — turns the gate/score internals into the plain-language
+   2   *  "why" that every recommendation must carry (CLAUDE.md §2.4). Produces the
+   3   *  user-facing display fields (label, warning, summary). */
+   4  
+   5  import type {
+   6    Plant,
+   7    SpotInput,
+   8    LightBand,
+   9    WindowAspect,
+  10    RecommendationFactors,
+  11    Confidence,
+  12  } from './types';
+  13  
+  14  const LIGHT_LABELS: Record<LightBand, string> = {
+  15    below_survival: 'Below survival light',
+  16    survival: 'Survival light (will persist)',
+  17    preferred: 'Good light (preferred range)',
+  18    excess: 'Very bright — possible light stress',
+  19  };
+  20  
+  21  export function displayLightLabel(band: LightBand): string {
+  22    return LIGHT_LABELS[band];
+  23  }
+  24  
+  25  export function orientationMatch(
+  26    p: Plant,
+  27    aspect: WindowAspect | null | undefined,
+  28  ): 'match' | 'mismatch' | 'unknown' {
+  29    if (!aspect || !p.aspect_orientation) {
+  30      return 'unknown';
+  31    }
+  32    const supported = p.aspect_orientation.split(';').map((s) => s.trim());
+  33    return supported.includes(aspect) ? 'match' : 'mismatch';
+  34  }
+  35  
+  36  function aspectWords(aspect: WindowAspect): string {
+  37    return aspect.replace('_facing', '').replace(/^./, (c) => c.toUpperCase());
+  38  }
+  39  
+  40  export function displayWarning(
+  41    p: Plant,
+  42    factors: RecommendationFactors,
+  43    orient: 'match' | 'mismatch' | 'unknown',
+  44  ): string | null {
+  45    const parts: string[] = [];
+  46  
+  47    if (factors.directSun.available && factors.directSun.value <= 0.6) {
+  48      parts.push('direct-sun exposure may harm this plant');
+  49    }
+  50    if (p.final_confidence === 'low' || p.final_confidence === 'provisional') {
+  51      parts.push(`thresholds are ${p.final_confidence}-confidence`);
+  52    } else if (p.value_status && /proxy|inherit/i.test(p.value_status)) {
+  53      parts.push('thresholds rely on a related-species proxy');
+  54    }
+  55    if (orient === 'mismatch') {
+  56      parts.push('this window aspect is not the plant’s preferred orientation');
+  57    }
+  58  
+  59    if (parts.length === 0) {
+  60      return null;
+  61    }
+  62    return `Note: ${parts.join('; ')}.`;
+  63  }
+  64  
+  65  /** Blend evidence confidence with measurement completeness: if optional inputs
+  66   *  (SPA / distance) were not captured, the result confidence is "reduced". */
+  67  export function recommendationConfidence(
+  68    p: Plant,
+  69    factors: RecommendationFactors,
+  70  ): Confidence | 'reduced' {
+  71    if (!factors.directSun.available || !factors.distance.available) {
+  72      return 'reduced';
+  73    }
+  74    return p.final_confidence;
+  75  }
+  76  
+  77  export function buildExplanation(
+  78    p: Plant,
+  79    spot: SpotInput,
+  80    band: LightBand,
+  81    factors: RecommendationFactors,
+  82  ): string {
+  83    const sentences: string[] = [];
+  84  
+  85    const lux = Math.round(spot.lux);
+  86    const name = p.common_name_main;
+  87  
+  88    // Light (always present)
+  89    switch (band) {
+  90      case 'preferred':
+  91        sentences.push(
+  92          `Your spot reads ${lux} lux, which is right inside ${name}’s preferred range, so it should grow well here.`,
+  93        );
+  94        break;
+  95      case 'survival':
+  96        sentences.push(
+  97          `Your spot reads ${lux} lux — enough to keep ${name} alive, but below its preferred range, so expect it to hold on rather than really thrive.`,
+  98        );
+  99        break;
+ 100      case 'excess':
+ 101        sentences.push(
+ 102          `Your spot reads ${lux} lux, brighter than ${name} likes, which can scorch or fade the leaves.`,
+ 103        );
+ 104        break;
+ 105      case 'below_survival':
+ 106        sentences.push(
+ 107          `Your spot reads ${lux} lux, below the minimum ${name} needs to survive, so it would slowly decline here.`,
+ 108        );
+ 109        break;
+ 110    }
+ 111  
+ 112    // Direct sun
+ 113    if (factors.directSun.available) {
+ 114      sentences.push(factors.directSun.note);
+ 115    }
+ 116  
+ 117    // Distance / zone
+ 118    if (factors.distance.available && spot.distanceToWindowM != null) {
+ 119      sentences.push(
+ 120        `It sits ${spot.distanceToWindowM.toFixed(1)} m from the window. ${factors.distance.note}`,
+ 121      );
+ 122    }
+ 123  
+ 124    // Orientation (informational)
+ 125    if (spot.windowAspect && p.aspect_orientation) {
+ 126      const om = orientationMatch(p, spot.windowAspect);
+ 127      if (om === 'match') {
+ 128        sentences.push(`The ${aspectWords(spot.windowAspect).toLowerCase()}-facing window is one it likes.`);
+ 129      } else if (om === 'mismatch') {
+ 130        sentences.push(
+ 131          `A ${aspectWords(spot.windowAspect).toLowerCase()}-facing window isn’t its usual pick, but the measured light is what really drives this match.`,
+ 132        );
+ 133      }
+ 134    }
+ 135  
+ 136    // Confidence
+ 137    sentences.push(confidenceSentence(p.final_confidence));
+ 138  
+ 139    return sentences.join(' ');
+ 140  }
+ 141  
+ 142  /** Plain-language version of the evidence-confidence tag. */
+ 143  function confidenceSentence(c: Confidence): string {
+ 144    switch (c) {
+ 145      case 'high':
+ 146        return 'This is backed by high-confidence, species-specific evidence.';
+ 147      case 'medium':
+ 148        return 'This is backed by medium-confidence evidence.';
+ 149      case 'low':
+ 150        return 'This rests on lower-confidence evidence, so treat it as a guide.';
+ 151      case 'provisional':
+ 152        return 'This rests on provisional evidence, so treat it as a starting point.';
+ 153      default:
+ 154        return `Evidence confidence: ${c}.`;
+ 155    }
+ 156  }
+
+================================================================================
+FILE: src/engine/recommend.ts   (118 lines)
+================================================================================
+   1  /** Orchestrator: gates -> score survivors -> rank -> attach explanations.
+   2   *  Pure function of (plants, spot); deterministic and side-effect free so it is
+   3   *  trivially unit-testable and identical on device and in tests. */
+   4  
+   5  import type { Plant, SpotInput, Recommendation } from './types';
+   6  import { applyGates } from './gates';
+   7  import { applyLuxCalibration } from './calibration';
+   8  import { scorePlant } from './scoring';
+   9  import { classifyBand, luxGapToMaintenance, luxGapToPreferred } from './lightFit';
+  10  import {
+  11    displayLightLabel,
+  12    displayWarning,
+  13    orientationMatch,
+  14    recommendationConfidence,
+  15    buildExplanation,
+  16  } from './explain';
+  17  
+  18  export interface RecommendResult {
+  19    /** Survivors, ranked best-first. */
+  20    recommended: Recommendation[];
+  21    /** Gated-out plants, with the reason — kept for transparency & evaluation. */
+  22    eliminated: Recommendation[];
+  23  }
+  24  
+  25  function toRecommendation(
+  26    p: Plant,
+  27    spot: SpotInput,
+  28    luxRaw: number,
+  29  ): Recommendation {
+  30    const gate = applyGates(p, spot);
+  31    const band = classifyBand(spot.lux, p);
+  32    const orient = orientationMatch(p, spot.windowAspect);
+  33  
+  34    if (gate.eliminated) {
+  35      return {
+  36        plant_id: p.plant_id,
+  37        common_name: p.common_name_main,
+  38        eliminated: true,
+  39        gateReason: gate.reason,
+  40        score: 0,
+  41        rank: null,
+  42        luxRaw,
+  43        luxUsed: spot.lux,
+  44        lightBand: band,
+  45        distanceZone: null,
+  46        factors: {
+  47          light: { value: 0, available: true, note: gate.reason ?? '' },
+  48          directSun: { value: 0, available: false, note: '' },
+  49          distance: { value: 0, available: false, note: '' },
+  50          confidence: { value: 0, available: false, note: '' },
+  51        },
+  52        luxGapToMaintenance: luxGapToMaintenance(spot.lux, p),
+  53        luxGapToPreferred: luxGapToPreferred(spot.lux, p),
+  54        orientationMatch: orient,
+  55        displayLightLabel: displayLightLabel(band),
+  56        displayWarning: null,
+  57        recommendationConfidence: 'reduced',
+  58        explanation: gate.reason ?? 'Eliminated by a rule gate.',
+  59        reference: p.reference ?? null, // display-only pass-through, never scored
+  60      };
+  61    }
+  62  
+  63    const scored = scorePlant(p, spot);
+  64    return {
+  65      plant_id: p.plant_id,
+  66      common_name: p.common_name_main,
+  67      eliminated: false,
+  68      gateReason: null,
+  69      score: scored.score,
+  70      rank: null, // assigned after sorting
+  71      luxRaw,
+  72      luxUsed: spot.lux,
+  73      lightBand: band,
+  74      distanceZone: scored.distanceZone,
+  75      factors: scored.factors,
+  76      luxGapToMaintenance: luxGapToMaintenance(spot.lux, p),
+  77      luxGapToPreferred: luxGapToPreferred(spot.lux, p),
+  78      orientationMatch: orient,
+  79      displayLightLabel: displayLightLabel(band),
+  80      displayWarning: displayWarning(p, scored.factors, orient),
+  81      recommendationConfidence: recommendationConfidence(p, scored.factors),
+  82      explanation: buildExplanation(p, spot, band, scored.factors),
+  83      reference: p.reference ?? null, // display-only pass-through, never scored
+  84    };
+  85  }
+  86  
+  87  const CONFIDENCE_RANK: Record<string, number> = {
+  88    high: 4,
+  89    medium: 3,
+  90    low: 2,
+  91    provisional: 1,
+  92    reduced: 0,
+  93  };
+  94  
+  95  export function recommend(plants: Plant[], spot: SpotInput): RecommendResult {
+  96    // "Both" mode: the caller passes RAW phone lux; the engine scores with the
+  97    // calibrated value and every result carries both (luxRaw / luxUsed).
+  98    const luxRaw = spot.lux;
+  99    const effSpot: SpotInput = { ...spot, lux: applyLuxCalibration(luxRaw) };
+ 100    const all = plants.map((p) => toRecommendation(p, effSpot, luxRaw));
+ 101  
+ 102    const recommended = all
+ 103      .filter((r) => !r.eliminated)
+ 104      .sort(
+ 105        (a, b) =>
+ 106          b.score - a.score ||
+ 107          (CONFIDENCE_RANK[b.recommendationConfidence] ?? 0) -
+ 108            (CONFIDENCE_RANK[a.recommendationConfidence] ?? 0) ||
+ 109          a.common_name.localeCompare(b.common_name),
+ 110      );
+ 111    recommended.forEach((r, i) => {
+ 112      r.rank = i + 1;
+ 113    });
+ 114  
+ 115    const eliminated = all.filter((r) => r.eliminated);
+ 116  
+ 117    return { recommended, eliminated };
+ 118  }
+
+================================================================================
+FILE: src/engine/index.ts   (10 lines)
+================================================================================
+   1  /** Public entrypoint for the recommendation engine. */
+   2  export * from './types';
+   3  export { recommend } from './recommend';
+   4  export type { RecommendResult } from './recommend';
+   5  export { applyGates, spotHasDirectSun } from './gates';
+   6  export { scorePlant, distanceZone, plantLightClass } from './scoring';
+   7  export { classifyBand, lightFitScore, preferredFloor } from './lightFit';
+   8  export { applyLuxCalibration } from './calibration';
+   9  export type { LuxCalibration } from './calibration';
+  10  export { WEIGHTS, LUX_CALIBRATION } from './config';
