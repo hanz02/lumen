@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">Lumen</h1>
-<p align="center"><b>An Android app that measures the light at the exact spot a plant will sit — and recommends plants that will actually survive there.</b></p>
+<p align="center"><b>An Android app that measures the light at the exact spot a plant will sit, then recommends plants that will actually survive there.</b></p>
 
 <p align="center">
   <img alt="React Native" src="https://img.shields.io/badge/React_Native-0.85-61DAFB?logo=react&logoColor=white&labelColor=20232a" />
@@ -18,9 +18,9 @@
 
 ## The problem
 
-Light indoors is not uniform. It can fall by an order of magnitude between a spot right beside a window and a spot three steps back — yet almost every plant-care app sorts an entire room into one label: **low, medium, or bright.** Two very different spots get the same answer, and none of them ask whether direct sun ever reaches the spot at all.
+Light indoors is not uniform. It can fall by an order of magnitude between a spot right beside a window and a spot three steps back. Yet almost every plant-care app sorts an entire room into one label: **low, medium, or bright.** Two very different spots get the same answer, and none of them ask whether direct sun ever reaches the spot at all.
 
-**Lumen measures the actual spot instead of the room.** It reads real lux at that exact location with the phone's own sensor, measures the distance to the window with the camera, and calculates whether direct sunlight will hit that spot at all — then runs all three through an explainable rule engine to rank 31 evidence-backed plant species by fit.
+**Lumen measures the actual spot instead of the room.** It reads real lux at that exact location with the phone's own sensor, measures the distance to the window with the camera, and calculates whether direct sunlight will hit that spot at all. All three measurements feed into an explainable rule engine that ranks 31 evidence-backed plant species by fit.
 
 This was validated with real field data, not a synthetic benchmark: **70 measurement sessions across 15 real windows over 3 months**, cross-checked against a professional lux meter and a tape measure.
 
@@ -31,11 +31,11 @@ This was validated with real field data, not a synthetic benchmark: **70 measure
 | Light-sensor accuracy vs. a professional lux meter | **99.6%** (210 paired readings, r = 0.996) |
 | AR camera distance accuracy vs. a tape measure | **within ±9 cm** (30 field spots) |
 | Independent correctness check of the recommendation engine | **620 / 620** decisions matched an oracle re-derived from raw plant evidence |
-| Real sessions where a room-label app would give the wrong answer the whole time | **59%** of 70 field sessions — light genuinely changed with distance but never crossed the app's own category boundary |
+| Real sessions where a room-label app would give the wrong answer the whole time | **59%** of 70 field sessions, where light genuinely changed with distance but never crossed the app's own category boundary |
 | Manual end-to-end test cases passed | **37 / 38** |
 | Automated unit tests | **118**, all passing |
 
-The core finding: holding the measured light constant and varying only distance and sun exposure still changes the recommendation — proving all three inputs matter, not just a lux reading. A conventional label-based app would have returned an identical plant list in every one of those cases.
+The core finding: holding the measured light constant and varying only distance and sun exposure still changes the recommendation. That proves all three inputs matter, not just a lux reading. A conventional label-based app would have returned an identical plant list in every one of those cases.
 
 ## Screenshots
 
@@ -57,40 +57,24 @@ The core finding: holding the measured light constant and varying only distance 
 
 ## What makes this technically interesting
 
-- **Real sensor calibration, not a toy demo.** Phone light sensors under-read relative to professional equipment — a known, documented behaviour. Lumen derives a per-device linear correction from 210 field-collected paired readings and validates it with a held-out cross-validation split, not just an in-sample fit.
-- **Spatial measurement via ARCore**, with a manual tape-measure fallback on devices without AR support — the app never locks out a user over hardware limits.
-- **Solar geometry from first principles.** A NOAA-based solar position algorithm calculates the sun's azimuth and elevation for the user's exact location, date, and time, then intersects that with the AR-measured window opening to estimate direct-sun hours — no external API, no network call.
-- **A fully explainable rule-based engine.** Two hard survival gates (light floor, direct-sun tolerance) followed by a weighted, four-factor suitability score (light fit, sun comfort, distance fit, evidence confidence). No machine learning, no black box — every recommendation and every rejection carries a plain-language reason traceable to a specific rule and a specific published source.
-- **An evidence-backed plant database**, built from 171 citation records across university extension services, the Royal Horticultural Society, peer-reviewed literature, and horticultural datasets — compiled into a single versioned SQLite file via a Python ETL pipeline with an automated integrity gate (row counts, orphaned foreign keys, broken source links all fail the build).
-- **Independently verified, not self-graded.** The engine's decisions were checked against a second, separately-written oracle program that re-derives the expected answer straight from the raw evidence — 620/620 agreement, with zero shared logic between the two implementations beyond the specification itself.
+- **Real sensor calibration, not a toy demo.** Phone light sensors under-read relative to professional equipment, a known and documented behaviour. Lumen derives a per-device linear correction from 210 field-collected paired readings and validates it with a held-out cross-validation split, not just an in-sample fit.
+- **Spatial measurement via ARCore**, with a manual tape-measure fallback on devices without AR support. The app never locks out a user over hardware limits.
+- **Solar geometry from first principles.** A NOAA-based solar position algorithm calculates the sun's azimuth and elevation for the user's exact location, date, and time, then intersects that with the AR-measured window opening to estimate direct-sun hours. No external API, no network call.
+- **A fully explainable rule-based engine.** Two hard survival gates (light floor, direct-sun tolerance) followed by a weighted, four-factor suitability score (light fit, sun comfort, distance fit, evidence confidence). No machine learning, no black box. Every recommendation and every rejection carries a plain-language reason traceable to a specific rule and a specific published source.
+- **An evidence-backed plant database**, built from 171 citation records across university extension services, the Royal Horticultural Society, peer-reviewed literature, and horticultural datasets. It compiles into a single versioned SQLite file through a Python ETL pipeline with an automated integrity gate: row count mismatches, orphaned foreign keys, and broken source links all fail the build.
+- **Independently verified, not self-graded.** The engine's decisions were checked against a second, separately written oracle program that re-derives the expected answer straight from the raw evidence. Result: 620/620 agreement, with zero shared logic between the two implementations beyond the specification itself.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  React Native / TypeScript UI                                │
-│  Wizard flow → capture cards → results & explanations         │
-├─────────────────────────────────────────────────────────────┤
-│  Native Android modules (Kotlin)                              │
-│  ARCore measurement · light sensor · compass · GPS             │
-├─────────────────────────────────────────────────────────────┤
-│  Recommendation engine (pure TypeScript, unit-tested)          │
-│  calibration → gates → weighted scoring → ranking → explain    │
-├─────────────────────────────────────────────────────────────┤
-│  Solar position engine (src/sun)                               │
-│  NOAA algorithm → azimuth/elevation → direct-sun hours          │
-├─────────────────────────────────────────────────────────────┤
-│  Plant evidence database (SQLite, bundled read-only asset)      │
-│  31 species · 171 citation records · built via integrity-gated  │
-│  Python ETL from the source evidence spreadsheets                │
-└─────────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="docs/architecture.png" width="640" alt="Lumen architecture diagram" />
+</p>
 
 Key files, if you want to dig in:
 
 | Layer | Path |
 |---|---|
-| Decision engine | [`src/engine/`](src/engine) — `gates.ts`, `scoring.ts`, `lightFit.ts`, `calibration.ts`, `recommend.ts`, `explain.ts` |
+| Decision engine | [`src/engine/`](src/engine): `gates.ts`, `scoring.ts`, `lightFit.ts`, `calibration.ts`, `recommend.ts`, `explain.ts` |
 | Solar position | [`src/sun/solar.ts`](src/sun/solar.ts) |
 | AR / sensor capture | [`src/ar/arMeasurement.ts`](src/ar/arMeasurement.ts), [`src/sensor/`](src/sensor) |
 | Native Android bridge | [`android/app/src/main/java/com/plantarapp/`](android/app/src/main/java/com/plantarapp) |
@@ -98,7 +82,7 @@ Key files, if you want to dig in:
 
 ## Tech stack
 
-**App:** React Native 0.85 · TypeScript · React 19
+**App:** React Native 0.85, TypeScript, React 19
 **Native:** Kotlin (ARCore, `SensorManager`, `LocationManager`, SQLite bridge)
 **Data:** SQLite (bundled, read-only), Python (`openpyxl`) for the ETL/build step
 **Testing:** Jest, with unit coverage across calibration, scoring, gating, and sensor-processing logic
@@ -109,13 +93,13 @@ Key files, if you want to dig in:
 
 - [Node.js](https://nodejs.org/) ≥ 22.11
 - JDK 17 and [Android Studio](https://developer.android.com/studio) (SDK Platform 36, `minSdkVersion` 24)
-- A physical Android device is strongly recommended — AR measurement, the light sensor, and the compass cannot be meaningfully tested on an emulator
+- A physical Android device is strongly recommended. AR measurement, the light sensor, and the compass cannot be meaningfully tested on an emulator.
 
 ### Clone and install
 
 ```bash
-git clone https://github.com/hanz02/Lumen.git
-cd Lumen
+git clone https://github.com/hanz02/lumen.git
+cd lumen
 npm install
 ```
 
@@ -125,11 +109,11 @@ npm install
 # Start Metro (the JS bundler) in one terminal
 npm start
 
-# Build and install on a connected device / emulator, in another terminal
+# Build and install on a connected device or emulator, in another terminal
 npm run android
 ```
 
-The plant evidence database (`plant_db.sqlite`, 31 species / 171 records) is already bundled as an Android asset, so the app runs immediately — no separate data setup needed.
+The plant evidence database (`plant_db.sqlite`, 31 species and 171 records) is already bundled as an Android asset, so the app runs immediately. No separate data setup needed.
 
 ### Running the tests
 
@@ -139,15 +123,15 @@ npm test
 
 ### Rebuilding the plant database (optional)
 
-The database is generated from source spreadsheets that aren't part of this repository. `tools/export_to_sqlite.py` is included to show the build process — including the integrity gate that checks row counts, cross-references, and citation links before allowing a build to succeed — but running it requires the original evidence workbooks.
+The database is generated from source spreadsheets that aren't part of this repository. `tools/export_to_sqlite.py` is included to show the build process, including the integrity gate that checks row counts, cross-references, and citation links before allowing a build to succeed. Running it requires the original evidence workbooks.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Free to use, learn from, and build on.
+MIT. See [LICENSE](LICENSE). Free to use, learn from, and build on.
 
 ## Background
 
-Lumen began as a Final Year Project (B.Eng. Software Engineering) exploring whether commodity phone sensors, augmented reality, and solar geometry could be combined into a single, explainable indoor-plant recommendation system. This repository contains the application codebase; the accompanying research and field evaluation are documented separately.
+Lumen began as a Final Year Project (B.Eng. Software Engineering) exploring whether commodity phone sensors, augmented reality, and solar geometry could be combined into a single, explainable indoor-plant recommendation system. This repository contains the application codebase. The accompanying research and field evaluation are documented separately.
 
 ---
 
