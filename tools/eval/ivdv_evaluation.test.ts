@@ -306,21 +306,21 @@ const SUN_PAIR: EvalSpot[] = [
 
 // --- Group 2: REAL light falloff that stays INSIDE one band ------------------
 // Field session W001 (2026-04-16), diffuse daylight, no direct sun. Light drops
-// 2800 -> 1328 lx across 50/100/150 cm but never leaves the Photone LOW band.
+// 2305 -> 1111 lx across 50/100/150 cm but never leaves the Photone LOW band.
 const FALLOFF_WITHIN_BAND: EvalSpot[] = [
-  { id: 'D1', lux: 2800, note: '50 cm from window', spot: { lux: 2800, distanceToWindowM: 0.5, directSunPresent: false, directSunHours: 0 } },
-  { id: 'D2', lux: 2443, note: '100 cm from window', spot: { lux: 2443, distanceToWindowM: 1.0, directSunPresent: false, directSunHours: 0 } },
-  { id: 'D3', lux: 1328, note: '150 cm from window', spot: { lux: 1328, distanceToWindowM: 1.5, directSunPresent: false, directSunHours: 0 } },
+  { id: 'D1', lux: 2305, note: '50 cm from window', spot: { lux: 2305, distanceToWindowM: 0.5, directSunPresent: false, directSunHours: 0 } },
+  { id: 'D2', lux: 1759.7, note: '100 cm from window', spot: { lux: 1759.7, distanceToWindowM: 1.0, directSunPresent: false, directSunHours: 0 } },
+  { id: 'D3', lux: 1111, note: '150 cm from window', spot: { lux: 1111, distanceToWindowM: 1.5, directSunPresent: false, directSunHours: 0 } },
 ];
 
 // --- Group 3: REAL light falloff that CROSSES band lines ---------------------
-// Field session W004, diffuse daylight. Light drops 12040 -> 3410 lx and crosses
-// FULL -> MEDIUM -> LOW, so here the fixed-label method DOES change its answer
+// Field session W004, diffuse daylight. Light drops 8962 -> 3213 lx and crosses
+// MEDIUM -> MEDIUM -> LOW, so here the fixed-label method DOES change its answer
 // (the honest half of the picture).
 const FALLOFF_CROSS_BAND: EvalSpot[] = [
-  { id: 'B1', lux: 12040, note: '50 cm from window', spot: { lux: 12040, distanceToWindowM: 0.5, directSunPresent: false, directSunHours: 0 } },
-  { id: 'B2', lux: 5192, note: '100 cm from window', spot: { lux: 5192, distanceToWindowM: 1.0, directSunPresent: false, directSunHours: 0 } },
-  { id: 'B3', lux: 3410, note: '150 cm from window', spot: { lux: 3410, distanceToWindowM: 1.5, directSunPresent: false, directSunHours: 0 } },
+  { id: 'B1', lux: 8962, note: '50 cm from window', spot: { lux: 8962, distanceToWindowM: 0.5, directSunPresent: false, directSunHours: 0 } },
+  { id: 'B2', lux: 5653.8, note: '100 cm from window', spot: { lux: 5653.8, distanceToWindowM: 1.0, directSunPresent: false, directSunHours: 0 } },
+  { id: 'B3', lux: 3213.4, note: '150 cm from window', spot: { lux: 3213.4, distanceToWindowM: 1.5, directSunPresent: false, directSunHours: 0 } },
 ];
 
 /** Compact one-line view of a spot run through BOTH methods. */
@@ -351,9 +351,21 @@ describe('PART 2 — measured engine vs fixed-label baseline (realistic spots)',
     expect(new Set(engCounts).size).toBeGreaterThan(1); // engine resolves the 3x light change
   });
 
-  it('Group 3 (real falloff across band lines): the fixed-label answer DOES change', () => {
+  it('Group 3 (real falloff across band lines): weakest case — same set, engine still reorders it', () => {
     const bands = FALLOFF_CROSS_BAND.map((s) => photoneBin(s.lux));
-    expect(new Set(bands).size).toBeGreaterThan(1); // honest: here lux-only differentiates too
+    expect(new Set(bands).size).toBeGreaterThan(1); // the band label does change here
+    const labelSets = FALLOFF_CROSS_BAND.map((s) => ids2(scoreLabelGuessed(s.lux, PLANTS)));
+    expect(labelSets[0]).toEqual(labelSets[1]);
+    expect(labelSets[1]).toEqual(labelSets[2]); // honest: label SET is still identical at all 3 distances
+    const engLists = FALLOFF_CROSS_BAND.map((s) => recommend(PLANTS, s.spot).recommended);
+    const engIds = engLists.map((l) => ids(l).slice().sort());
+    expect(engIds[0]).toEqual(engIds[1]);
+    expect(engIds[1]).toEqual(engIds[2]); // engine's recommended SET is also identical here
+    // but the engine still reorders by suitability as the spot dims — the label list never does
+    const orderChanged =
+      JSON.stringify(engLists[0].map((r) => r.plant_id)) !==
+      JSON.stringify(engLists[2].map((r) => r.plant_id));
+    expect(orderChanged).toBe(true);
   });
 
   it('writes the Part 2 comparison report', () => {
@@ -383,7 +395,7 @@ describe('PART 2 — measured engine vs fixed-label baseline (realistic spots)',
 
     L.push('### Group 2 — real falloff that stays in ONE band (W001 session)\n');
     L.push(
-      'Light drops 2800 → 1328 lx (a 3× change) but never leaves the LOW band, so the ' +
+      'Light drops 2305 → 1111 lx (a 2× change) but never leaves the LOW band, so the ' +
         'fixed-label list is identical at every distance. The engine resolves it.\n',
     );
     L.push('| Spot | Lux | Photone band | Label-guessed (count) | Engine # rec | Engine #1 pick |');
@@ -391,11 +403,16 @@ describe('PART 2 — measured engine vs fixed-label baseline (realistic spots)',
     FALLOFF_WITHIN_BAND.forEach((s) => L.push(rowFor(s)));
     L.push('');
 
-    L.push('### Group 3 — real falloff that CROSSES bands (W004 session)  ·  *honest case*\n');
+    L.push('### Group 3 — real falloff that crosses a band line (W004 session)  ·  *weakest, reported honestly*\n');
     L.push(
-      'Here light drops 12040 → 3410 lx and crosses FULL → MEDIUM → LOW, so the fixed-label ' +
-        'method **does** change its answer. About 45% of field sessions look like this; the ' +
-        'other 55% look like Group 2 (the change hides inside one band).\n',
+      'Here light drops 8962 → 3213 lx, moving from the MEDIUM band into LOW. Despite crossing a ' +
+        'band line, **both methods keep the same 30 plants at all three distances** — neither ' +
+        'changes which plants it recommends, because no plant in the dataset sits exactly on this ' +
+        'boundary. What *does* change is the engine\'s **ranking**: several plants rise in score as ' +
+        'the light moves from a plant\'s survival range into its preferred range, while the ' +
+        'fixed-label list stays flat and unranked throughout. This is therefore the weakest of the ' +
+        'three comparisons — reported honestly — and it is exactly the case that motivates the ' +
+        'ranking-advantage argument below.\n',
     );
     L.push('| Spot | Lux | Photone band | Label-guessed (count) | Engine # rec | Engine #1 pick |');
     L.push('|---|---:|---|---:|---:|---|');
@@ -410,10 +427,15 @@ describe('PART 2 — measured engine vs fixed-label baseline (realistic spots)',
         '- **Distance shows up in lux, but only crosses a band line ~45% of the time.** When it ' +
         'stays in one band (Group 2, ~55% of sessions) the fixed-label method cannot tell the ' +
         'distances apart even though the real light tripled; the engine, reading the precise value ' +
-        'against each plant\'s own floor, can. When it crosses a band (Group 3) the fixed-label ' +
-        'method differentiates too — credited honestly.\n' +
+        'against each plant\'s own floor, can.\n' +
+        '- **Group 3 is the weakest case, reported honestly.** Even though the reading crosses a ' +
+        'band line here, no plant in the dataset happens to sit on that exact boundary, so both ' +
+        'methods keep the same 30 plants at all three distances. The one difference that survives: ' +
+        'the engine still reorders those 30 by suitability as the spot dims, something the flat, ' +
+        'unranked fixed-label list can never do.\n' +
         '- **The engine always ranks; the fixed-label method never does.** Even with the same ' +
-        'survivors, the engine returns a best-first order using distance and sun.\n',
+        'survivors, the engine returns a best-first order using distance and sun — this is the one ' +
+        'advantage that holds in every group, including the weakest one.\n',
     );
 
     fs.writeFileSync(path.join(OUT_DIR, 'part2_comparison.md'), L.join('\n'), 'utf-8');

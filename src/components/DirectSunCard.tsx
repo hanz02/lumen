@@ -471,7 +471,7 @@ function SideView({ geom }: { geom: ApertureDiagram }) {
         })}
         <Circle cx={sunPx} cy={sunPy} r={8} fill="#FFD86B" />
 
-        {/* labels — α° rendered last so it always sits above the animated sun */}
+        {/* labels — sun angle rendered last so it always sits above the animated sun */}
         <SvgText x={wallX + 9} y={headY + 1} fill={palette.textDim} fontSize={8.5}>
           head {topM.toFixed(1)} m
         </SvgText>
@@ -481,8 +481,8 @@ function SideView({ geom }: { geom: ApertureDiagram }) {
         <SvgText x={(wallX + plantX) / 2} y={dimY - 3} fill={palette.textDim} fontSize={8.5} textAnchor="middle">
           d = {d.toFixed(1)} m
         </SvgText>
-        <SvgText x={VBW - 6} y={14} fill={palette.amber} fontSize={9} fontWeight="700" textAnchor="end">
-          α = {Math.round(alpha)}°
+        <SvgText x={VBW - 14} y={16} fill={palette.amber} fontSize={9} fontWeight="700" textAnchor="end">
+          Sun angle {Math.round(alpha)}°
         </SvgText>
       </Svg>
     </View>

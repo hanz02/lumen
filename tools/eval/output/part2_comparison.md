@@ -15,26 +15,27 @@ Lux cannot encode direct sun, so the fixed-label method is blind to the differen
 
 ### Group 2 — real falloff that stays in ONE band (W001 session)
 
-Light drops 2800 → 1328 lx (a 3× change) but never leaves the LOW band, so the fixed-label list is identical at every distance. The engine resolves it.
+Light drops 2305 → 1111 lx (a 2× change) but never leaves the LOW band, so the fixed-label list is identical at every distance. The engine resolves it.
 
 | Spot | Lux | Photone band | Label-guessed (count) | Engine # rec | Engine #1 pick |
 |---|---:|---|---:|---:|---|
-| D1 (50 cm from window) | 2800 | low | 30 | 30 | Anthurium / Flamingo Flower |
-| D2 (100 cm from window) | 2443 | low | 30 | 30 | Anthurium / Flamingo Flower |
-| D3 (150 cm from window) | 1328 | low | 30 | 19 | Anthurium / Flamingo Flower |
+| D1 (50 cm from window) | 2305 | low | 30 | 28 | Anthurium / Flamingo Flower |
+| D2 (100 cm from window) | 1759.7 | low | 30 | 25 | Anthurium / Flamingo Flower |
+| D3 (150 cm from window) | 1111 | low | 30 | 19 | Anthurium / Flamingo Flower |
 
-### Group 3 — real falloff that CROSSES bands (W004 session)  ·  *honest case*
+### Group 3 — real falloff that crosses a band line (W004 session)  ·  *weakest, reported honestly*
 
-Here light drops 12040 → 3410 lx and crosses FULL → MEDIUM → LOW, so the fixed-label method **does** change its answer. About 45% of field sessions look like this; the other 55% look like Group 2 (the change hides inside one band).
+Here light drops 8962 → 3213 lx, moving from the MEDIUM band into LOW. Despite crossing a band line, **both methods keep the same 30 plants at all three distances** — neither changes which plants it recommends, because no plant in the dataset sits exactly on this boundary. What *does* change is the engine's **ranking**: several plants rise in score as the light moves from a plant's survival range into its preferred range, while the fixed-label list stays flat and unranked throughout. This is therefore the weakest of the three comparisons — reported honestly — and it is exactly the case that motivates the ranking-advantage argument below.
 
 | Spot | Lux | Photone band | Label-guessed (count) | Engine # rec | Engine #1 pick |
 |---|---:|---|---:|---:|---|
-| B1 (50 cm from window) | 12040 | full | 31 | 30 | Anthurium / Flamingo Flower |
-| B2 (100 cm from window) | 5192 | medium | 30 | 30 | Anthurium / Flamingo Flower |
-| B3 (150 cm from window) | 3410 | low | 30 | 30 | Anthurium / Flamingo Flower |
+| B1 (50 cm from window) | 8962 | medium | 30 | 30 | Anthurium / Flamingo Flower |
+| B2 (100 cm from window) | 5653.8 | medium | 30 | 30 | Anthurium / Flamingo Flower |
+| B3 (150 cm from window) | 3213.4 | low | 30 | 30 | Anthurium / Flamingo Flower |
 
 ## Interpretation
 
 - **Sun (Group 1) is the part lux can never reveal.** The fixed-label method gives the two spots the same list; the engine removes scorch-prone plants from the sunny one. This holds no matter how lux and distance correlate, so it is the strongest evidence.
-- **Distance shows up in lux, but only crosses a band line ~45% of the time.** When it stays in one band (Group 2, ~55% of sessions) the fixed-label method cannot tell the distances apart even though the real light tripled; the engine, reading the precise value against each plant's own floor, can. When it crosses a band (Group 3) the fixed-label method differentiates too — credited honestly.
-- **The engine always ranks; the fixed-label method never does.** Even with the same survivors, the engine returns a best-first order using distance and sun.
+- **Distance shows up in lux, but only crosses a band line ~45% of the time.** When it stays in one band (Group 2, ~55% of sessions) the fixed-label method cannot tell the distances apart even though the real light tripled; the engine, reading the precise value against each plant's own floor, can.
+- **Group 3 is the weakest case, reported honestly.** Even though the reading crosses a band line here, no plant in the dataset happens to sit on that exact boundary, so both methods keep the same 30 plants at all three distances. The one difference that survives: the engine still reorders those 30 by suitability as the spot dims, something the flat, unranked fixed-label list can never do.
+- **The engine always ranks; the fixed-label method never does.** Even with the same survivors, the engine returns a best-first order using distance and sun — this is the one advantage that holds in every group, including the weakest one.
